@@ -1,0 +1,80 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+$loop = React\EventLoop\Factory::create();
+$filesystem = \React\Filesystem\Filesystem::create($loop);
+
+(new React\Socket\Server($_ENV['SOCKET_HOST']. ':' . $_ENV['SOCKET_PORT'], $loop))
+    ->on('connection', function (React\Socket\ConnectionInterface $connection) use ($loop, $redis) {
+        echo 'New connection: ' . $connection->getRemoteAddress() . "\n";
+
+        $connection->write("Connection from " . $connection->getRemoteAddress() . " accepted.\n");
+
+        $connection->on('data', function ($data) use ($loop, $connection, $redis) {
+            $connection->write('Received data: length: ' . strlen($data) . "\n");
+            $connection->write(var_dump($data) . "\n");
+
+            $data = explode("\n", trim($data));
+
+            $connection->write('Received messages: qtt: ' . count($data) . "\n");
+
+            foreach ($data as $key => $message) {
+                $date = \DateTime::createFromFormat('Y-m-d H:i:s', substr($message, 16, 19));
+                if ($date instanceof \DateTime) {
+                    $isMockData = true;
+                    $obdDeviceNumber = substr($message, 0, 15);
+                    $message = substr($message, 36);
+                } else {
+                    $isMockData = false;
+                    $obdDeviceNumber = null;
+                }
+
+                $redis->publish('filesystem',
+                    ($isMockData ? $obdDeviceNumber : str_repeat('0', 15))
+                    . ' ' . ($isMockData ? $date->format('Y-m-d H:i:s') : date('Y-m-d H:i:s'))
+                    . ' ' . $message
+                );
+
+                try {                    
+                    $package = \App\Decoder2::decode($message);
+
+                    foreach ($package as $row) {
+                        $json = json_encode($row);
+
+                        if (!isset($row['serial'])) {
+                            echo 'No OBD Serial sent on package' . "\n";
+                            continue;
+                        }
+
+                        $redis->publish('database', $json);
+                        $redis->publish('alert', $json);
+                        $redis->publish('realtime', $json);
+                    }
+                } catch (\Exception $e) {
+                    echo 'An exception occured: ' . $e->getMessage() . "\n\n\n";
+
+                    $connection->write('Error: ' . $e->getMessage() . "\n");
+                }
+            }
+        });
+
+        $connection->on('error', function (Exception $e) {
+            echo 'error: ' . $e->getMessage() . "\n";
+        });
+
+        $connection->on('end', function () use ($connection) {
+            echo 'Message from ' . $connection->getRemoteAddress() . ' endend. ' . "\n";
+        });
+
+        $connection->on('close', function () use ($connection) {
+            echo 'Connection from ' . $connection->getRemoteAddress() . ' closed.' . "\n";
+        });
+    }, function (Exception $error) use ($loop) {
+        echo "Cannot connect to server: " . $error->getMessage() . "\n";
+        $loop->stop();
+    })
+;
+
+$loop->run();

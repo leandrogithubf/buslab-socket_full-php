@@ -1,0 +1,792 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+use App\Entity\Obd;
+use App\Entity\Vehicle;
+use App\Entity\Company;
+use App\Entity\VehicleModel;
+use App\Entity\VehicleStatus;
+use App\Entity\Checkpoint;
+use App\Entity\ParameterConfiguration;
+use App\Entity\Event;
+use App\Entity\Line;
+use App\Entity\Trip;
+
+$obds = App\DAO::getObds($em);
+
+$pubsub = $redis->pubSubLoop();
+$pubsub->subscribe('alert');
+
+foreach ($pubsub as $message) {
+    if ($message->kind !== 'message') {
+        continue;
+    }
+
+    $row = json_decode($message->payload, true);
+    if (!isset($obds[$row['serial']]) || !$obds[$row['serial']] instanceof Obd) {
+        $obds = App\DAO::getObds($em);
+        if (!isset($obds[$row['serial']]) || !$obds[$row['serial']] instanceof Obd) {
+            echo 'Invalid OBD Serial' . $row['serial'] . "\n";
+            // TODO: Generate alert
+            continue;
+        }
+    }
+    $obd = $obds[$row['serial']];
+
+    $vehicle = $em->getRepository(Vehicle::class)->findOneByObd($obd);
+    if (!$vehicle instanceof \App\Entity\Vehicle) {
+        echo 'No vehicle assigned to OBD ' . $row['serial'] . "\n";
+        // TODO: Generate alert
+        continue;
+    }
+
+    if (isset($row['chassi'])) {
+        $vehicleByChassis = $em->getRepository('App\Entity\Vehicle')->findOneByChassi($row['chassi']);
+        if (!is_null($vehicleByChassis) && !is_null($vehicle)) {
+            if ($vehicle->getId() !== $vehicleByChassis->getId()) {
+                echo 'Vehicle assigned and chassi sent does not matches ' . $row['serial'] . "\n";
+                // TODO: Generate alert
+                continue;
+            }
+        }
+    }
+
+//excesso de velocidade
+    $speedCompany = App\DAO::getSpeedCompany($em,$obd);
+    $vehicle = $em->getRepository(Vehicle::class)->findOneByObd($obd);
+    $trip = App\DAO::getTripByVehicle($em,$vehicle);
+
+    if (!$trip) {
+        $line = null;
+        $driver = null;
+        $collector = null;
+    }else{
+        $line = $trip->getLine();
+        $driver = $trip->getDriver();
+        $collector = null;
+        if ($trip->getCollector()) {
+            $collector = $trip->getCollector();
+        }
+    }
+
+    if (isset($row['gps']['speed']['value']) && $row['gps']['speed']['value'] > $speedCompany || isset($row['gps']['speed']['value']) && !is_null($line) && $row['gps']['speed']['value'] > $line->getMaxSpeed()) {
+
+        do {
+        $identifier = App\Utils\String\Identifier::database();
+        $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+        } while($checkpointByIdentifier instanceof Event);
+
+        $modality = App\DAO::getEventModality($em,'Evento'); 
+        $status = App\DAO::getEventStatus($em,'Em aberto'); 
+        $category = App\DAO::getEventCategory($em,'Excesso de velocidade');
+        $lastEvent =  App\DAO::getLastEvent($em);
+        if ($lastEvent) {
+            $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+        }else{
+            $qtt = 0;
+        }
+        $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+        $event = (new Event())
+            ->setCreatedAt(new \DateTime())
+            ->setUpdatedAt(new \DateTime())
+            ->setIsActive(true)
+            ->setIdentifier($identifier)
+            ->setComment('Veículo acima do limite de velocidade: ' . $row['gps']['speed']['value'])
+            ->setVehicle($vehicle)
+            ->setModality($modality)
+            ->setStatus($status)
+            ->setCategory($category)
+            ->setStart(DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+            ->setEnd(DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+            ->setLine($line)
+            ->setEmployee(null)
+            ->setProtocol($protocol)
+            ->setAction(null)
+            ->setTrip($trip)
+            ->setDriver($driver)
+            ->setCollector($collector)
+            ->setSector($category->getSector())
+            ->setLocal(null)
+        ;
+        $em->persist($event);
+        $em->flush();
+    }
+    //fim de excesso de velocidade
+
+    //alta temperatura do motor
+    $parametersVehicle = App\DAO::getParametersVehicle($em,$obd);
+    $vehicle = $em->getRepository(Vehicle::class)->findOneByObd($obd);
+    $trip = App\DAO::getTripByVehicle($em,$vehicle);
+
+    if (!$trip) {
+        $line = null;
+        $driver = null;
+        $collector = null;
+    }else{
+        $line = $trip->getLine();
+        $driver = $trip->getDriver();
+        $collector = null;
+        if ($trip->getCollector()) {
+            $collector = $trip->getCollector();
+        }
+    }
+    if (isset($row['obd']['ect']['value']) && $row['obd']['ect']['value'] > $parametersVehicle->getEct() ) {
+
+        do {
+        $identifier = App\Utils\String\Identifier::database();
+        $eventByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+        } while($eventByIdentifier instanceof Event);
+
+        $modality = App\DAO::getEventModality($em,'Evento'); 
+        $status = App\DAO::getEventStatus($em,'Em aberto'); 
+        $category = App\DAO::getEventCategory($em,'Alta temperatura do líquido de arrefecimento do motor');
+        $lastEvent =  App\DAO::getLastEvent($em);
+        if ($lastEvent) {
+            $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+        }else{
+            $qtt = 0;
+        }
+        $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+        $event = (new Event())
+            ->setCreatedAt(new \DateTime())
+            ->setUpdatedAt(new \DateTime())
+            ->setIsActive(true)
+            ->setIdentifier($identifier)
+            ->setComment('Alta temperatura do líquido de arrefecimento do motor: ' . $row['obd']['ect']['value'])
+            ->setVehicle($vehicle)
+            ->setModality($modality)
+            ->setStatus($status)
+            ->setCategory($category)
+            ->setStart(DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+            ->setEnd(DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+            ->setLine($line ? $line : null)
+            ->setEmployee(null)
+            ->setProtocol($protocol)
+            ->setAction(null)
+            ->setTrip($trip ? $trip : null)
+            ->setDriver($driver ? $driver : null)
+            ->setCollector($collector ? $collector : null)
+            ->setSector($category->getSector())
+            ->setLocal(null)
+        ;
+        $em->persist($event);
+        $em->flush();
+    }
+    // fim do alta temperatura do motor
+
+    //alta temperatura do ar de admissão
+    $parametersVehicle = App\DAO::getParametersVehicle($em,$obd);
+    $vehicle = $em->getRepository(Vehicle::class)->findOneByObd($obd);
+    $trip = App\DAO::getTripByVehicle($em,$vehicle);
+
+    if (!$trip) {
+        $line = null;
+        $driver = null;
+        $collector = null;
+    }else{
+        $line = $trip->getLine();
+        $driver = $trip->getDriver();
+        $collector = null;
+        if ($trip->getCollector()) {
+            $collector = $trip->getCollector();
+        }
+    }
+    if (isset($row['obd']['iat']['value']) && $row['obd']['iat']['value'] > $parametersVehicle->getIat() ) {
+
+        do {
+        $identifier = App\Utils\String\Identifier::database();
+        $eventByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+        } while($eventByIdentifier instanceof Event);
+
+        $modality = App\DAO::getEventModality($em,'Evento'); 
+        $status = App\DAO::getEventStatus($em,'Em aberto'); 
+        $category = App\DAO::getEventCategory($em,'Alta temperatura do ar de admissão');
+        $lastEvent =  App\DAO::getLastEvent($em);
+        if ($lastEvent) {
+            $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+        }else{
+            $qtt = 0;
+        }
+        $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+        $event = (new Event())
+            ->setCreatedAt(new \DateTime())
+            ->setUpdatedAt(new \DateTime())
+            ->setIsActive(true)
+            ->setIdentifier($identifier)
+            ->setComment('Alta temperatura do ar de admissão: ' . $row['obd']['iat']['value'])
+            ->setVehicle($vehicle)
+            ->setModality($modality)
+            ->setStatus($status)
+            ->setCategory($category)
+            ->setStart(DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+            ->setEnd(DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+            ->setLine($line ? $line : null)
+            ->setEmployee(null)
+            ->setProtocol($protocol)
+            ->setAction(null)
+            ->setTrip($trip ? $trip : null)
+            ->setDriver($driver ? $driver : null)
+            ->setCollector($collector ? $collector : null)
+            ->setSector($category->getSector())
+            ->setLocal(null)
+        ;
+        $em->persist($event);
+        $em->flush();
+    }
+    //fim de alta temperatura do ar de admissmão
+
+    // Freada brusca
+    if ($vehicle) {
+
+        if (isset($row['obd_status'])) {
+            $event_braking = 'Rough braking';
+            if (in_array($event_braking, $row['obd_status'])) {
+                do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto'); 
+                $category = App\DAO::getEventCategory($em,'Freada brusca');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                $event = (new Event())
+                    ->setCreatedAt(new \DateTime())
+                    ->setUpdatedAt(new \DateTime())
+                    ->setIsActive(true)
+                    ->setIdentifier($identifier)
+                    ->setComment('')
+                    ->setVehicle($vehicle)
+                    ->setModality($modality)
+                    ->setStatus($status)
+                    ->setCategory($category)//
+                    ->setStart(\DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+                    ->setEnd(null)
+                    ->setLine($trip ? $trip->getLine() : null)
+                    ->setEmployee(null)
+                    ->setProtocol($protocol)
+                    ->setAction(null)
+                    ->setTrip($trip ? $trip : null)
+                    ->setDriver($driver ? $driver : null)
+                    ->setCollector($collector ? $collector : null)
+                    ->setSector($category->getSector())
+                    ->setLocal(null)
+                ;
+
+                $em->persist($event);
+                $em->flush();  
+            }
+        }
+
+        // Arrancada brusca
+        if (isset($row['obd_status'])) {
+            $event_braking = 'Rapid acceleration';
+            if (in_array($event_braking, $row['obd_status'])) {
+                do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto'); 
+                $category = App\DAO::getEventCategory($em,'Arrancada brusca');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                if (is_null($checkpoint->getTrip())) {
+                    $event = (new Event())
+                        ->setCreatedAt(new \DateTime())
+                        ->setUpdatedAt(new \DateTime())
+                        ->setIsActive(true)
+                        ->setIdentifier($identifier)
+                        ->setComment('')
+                        ->setVehicle($vehicle)
+                        ->setModality($modality)
+                        ->setStatus($status)
+                        ->setCategory($category)//
+                        ->setStart(\DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+                        ->setEnd(null)
+                        ->setLine($trip ? $trip->getLine() : null)
+                        ->setEmployee(null)
+                        ->setProtocol($protocol)
+                        ->setAction(null)
+                        ->setTrip($trip ? $trip : null)
+                        ->setDriver($driver ? $driver : null)
+                        ->setCollector($collector ? $collector : null)
+                        ->setSector($category->getSector())
+                        ->setLocal(null)
+                    ;
+                }
+                $em->persist($event);
+                $em->flush();  
+            }
+        }
+    }
+
+    $checkpointDate = DateTime::createFromFormat('Y-m-d H:i:s', $row['date']);
+    $startViewTrips = (clone $checkpointDate)->modify('-300 minutes');
+    $trips = App\DAO::getTripsByDate($em,$startViewTrips);
+
+    foreach ($trips as $key => $trip) {
+        $schedule = $trip->getScheduleDate()->schedule();
+        $startToleratedEarly = (clone $schedule->getStartsAt())->modify(' -5 minutes'); 
+        $startToleratedLate = (clone $schedule->getStartsAt())->modify(' +5 minutes'); 
+
+        //adiantado na saida    
+        if ($trip->getStartsAt()->format('H:i') < $startToleratedEarly->format('H:i')) {
+            //Verifica se evento ja existe
+            $eventsExist = App\DAO::getEventByType($em,$trip,15);
+            if (is_null($eventsExist)) {
+
+                do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto'); 
+                $category = App\DAO::getEventCategory($em,'Adiantado na saída');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                $event = (new Event())
+                    ->setCreatedAt(new \DateTime())
+                    ->setUpdatedAt(new \DateTime())
+                    ->setIsActive(true)
+                    ->setIdentifier($identifier)
+                    ->setComment('')
+                    ->setVehicle($trip->getVehicle())
+                    ->setModality($modality)
+                    ->setStatus($status)
+                    ->setCategory($category)
+                    ->setStart($trip->getStartsAt())
+                    ->setEnd($trip->getStartsAt())
+                    ->setLine($trip ? $trip->getLine() : null)
+                    ->setEmployee(null)
+                    ->setProtocol($protocol)
+                    ->setAction(null)
+                    ->setTrip($trip ? $trip : null)
+                    ->setDriver($driver ? $driver : null)
+                    ->setCollector($collector ? $collector : null)
+                    ->setSector($category->getSector())
+                    ->setLocal(null)
+                ;
+
+                $em->persist($event);
+                $em->flush();  
+                continue;
+            }
+        }
+
+        //atrasado na saida
+        if ($trip->getStartsAt()->format('H:i') > $startToleratedLate->format('H:i')) {
+            //Verifica se evento ja existe
+            $eventsExist = App\DAO::getEventByType($em,$trip,4);
+            if (is_null($eventsExist)) {
+                do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto'); 
+                $category = App\DAO::getEventCategory($em,'Atrasado na saída');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                $event = (new Event())
+                    ->setCreatedAt(new \DateTime())
+                    ->setUpdatedAt(new \DateTime())
+                    ->setIsActive(true)
+                    ->setIdentifier($identifier)
+                    ->setComment('')
+                    ->setVehicle($trip->getVehicle())
+                    ->setModality($modality)
+                    ->setStatus($status)
+                    ->setCategory($category)//
+                    ->setStart($trip->getStartsAt())
+                    ->setEnd($trip->getStartsAt())
+                    ->setLine($trip ? $trip->getLine() : null)
+                    ->setEmployee(null)
+                    ->setProtocol($protocol)
+                    ->setAction(null)
+                    ->setTrip($trip ? $trip : null)
+                    ->setDriver($driver ? $driver : null)
+                    ->setCollector($collector ? $collector : null)
+                    ->setSector($category->getSector())
+                    ->setLocal(null)
+                ;
+
+                $em->persist($event);
+                $em->flush();  
+                continue;
+            }
+        }
+
+    }
+
+    //OBD removido
+    if (isset($row['obd_status'])) {
+        // verificar se $row['obd_status'] contem 'Power cut'
+        //se sim gerar evento
+
+        //Verifica se evento ja existe
+            $eventsExist = App\DAO::getLastEventExistByCategory($em,9,$vehicle);
+            if (is_null($eventsExist)) {
+                do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto'); 
+                $category = App\DAO::getEventCategory($em,'Obd removido');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                $event = (new Event())
+                    ->setCreatedAt(new \DateTime())
+                    ->setUpdatedAt(new \DateTime())
+                    ->setIsActive(true)
+                    ->setIdentifier($identifier)
+                    ->setComment('')
+                    ->setVehicle($vehicle)
+                    ->setModality($modality)
+                    ->setStatus($status)
+                    ->setCategory($category)//
+                    ->setStart(\DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+                    ->setEnd(null)
+                    ->setLine($trip ? $trip->getLine() : null)
+                    ->setEmployee(null)
+                    ->setProtocol($protocol)
+                    ->setAction(null)
+                    ->setTrip($trip ? $trip : null)
+                    ->setDriver($driver ? $driver : null)
+                    ->setCollector($collector ? $collector : null)
+                    ->setSector($category->getSector())
+                    ->setLocal(null)
+                ;
+
+                $em->persist($event);
+                $em->flush();  
+                continue;
+            }
+
+    }
+
+    // Ociosidade
+    $ocioso = false;
+    $company = $obd->getCompany();
+    $parameter = $em->getRepository(ParameterConfiguration::class)
+        ->createQueryBuilder('e')
+        ->andWhere('e.parameter = :parameter')
+        ->andWhere('e.company > :company')
+        ->setParameter('parameter', 17)
+        ->setParameter('company', $company->getId())
+        ->getQuery()
+        ->getOneOrNullResult()
+    ;
+
+    if (!is_null($parameter) && !is_null($parameter->getMaxAllowed())) {
+        if (isset($row['rpm']) && $row['rpm'] > 0 && isset($row['speed']) && $row['speed'] = 0) {
+            $time = \DateTime::createFromFormat('Y-m-d H:i:s', $row['date']);
+            $checkpoints = $em->getRepository(Checkpoint::class)
+                    ->createQueryBuilder('e')
+                    ->andWhere('e.obd = :obd')
+                    ->andWhere('e.date > :time')
+                    ->setParameter('obd', $obd)
+                    ->setParameter('time', $time->modify('-'.$parameter->getMaxAllowed().' minutes'))
+                    ->orderBy('e.id', 'ASC')
+                    ->getQuery()
+                    ->getResult()
+                ;
+
+                foreach ($checkpoints as $key => $checkpoint) {
+                    if ($checkpoint->getSpeed() == 0 && $checkpoint->getRpm() > 0 && (isset($checkpoints[$key+1]) && $checkpoints[$key+1]->getDate()) >= $time->modify('-'.$parameter->getMaxAllowed().' minutes') && $checkpoint->getDate() < $row['date']) {
+                        $ocioso = true;
+                        continue;
+                    }
+                    if ($checkpoint->getSpeed() > 0 || ($checkpoint->getRpm() == 0 || is_null($checkpoint->getRpm())) && $checkpoint->getDate() > $time->modify('-'.$parameter->getMaxAllowed().' minutes')) {
+                        $ocioso = false;
+                    }
+
+                }
+            }
+
+            if ($ocioso == true) {
+                do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto'); 
+                $category = App\DAO::getEventCategory($em,'Ocioso');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+                $event = (new Event())
+                        ->setCreatedAt(new \DateTime())
+                        ->setUpdatedAt(new \DateTime())
+                        ->setIsActive(true)
+                        ->setIdentifier($identifier)
+                        ->setComment('')
+                        ->setVehicle($vehicle)
+                        ->setModality($modality)
+                        ->setStatus($status)
+                        ->setCategory($category)
+                        ->setStart(\DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+                        ->setEnd(null)
+                        ->setLine($trip ? $trip->getLine() : null)
+                        ->setEmployee(null)
+                        ->setProtocol($protocol)
+                        ->setAction(null)
+                        ->setTrip($trip ? $trip : null)
+                        ->setDriver($trip ? $trip->getDriver() : null)
+                        ->setCollector($trip ? !is_null($trip->getCollector()) ? $trip->getCollector() : null : null)
+                        ->setSector($category->getSector())
+                        ->setLocal(null)
+                    ;
+
+                    $em->persist($event);
+                    $em->flush();  
+                    continue;
+            }
+        }
+
+// adicionar rotina de verificação de vencimento de inspeção em veiculo
+    $vehiclesAll = App\DAO::getAllVehicles($em);
+
+    foreach ($vehiclesAll as $key => $vehicle) {
+        if ($vehicle->getCompany()) {
+
+            $paramenters = App\DAO::getParametersConfigurationsCompany($em, $vehicle->getCompany());
+            $timeLimit = 0;
+            foreach ($paramenters as $key => $paramenter) {
+                if ($paramenter->getParameter()->getDescription() == 'Tempo de validade de inspeção obrigatória') {
+                    $timeLimit = $paramenter->getMaxAllowed();
+                }
+            }
+
+            if (is_null($vehicle->getPeriodicInspection())) {
+                continue;
+            }
+
+            $limit = clone($vehicle->getPeriodicInspection());
+            $time = new DateInterval('P6M');
+            if ($timeLimit != 0 && !is_null($timeLimit)) {                
+                $time = new DateInterval('P'.strval($timeLimit).'M');
+            } 
+
+            $limit->add($time);
+            $now = new \DateTime();
+
+            if ($now < $limit && $vehicle->getStatus()->getId() == 1) {
+                continue;
+            }
+
+            if ($now < $limit && $vehicle->getStatus()->getId() == 2) {
+                $vehicleStatus = $em->getRepository(VehicleStatus::class)
+                        ->createQueryBuilder('e')
+                        ->andWhere('e.status = :status')
+                        ->setParameter('status', 'Liberado')
+                        ->getQuery()
+                        ->getOneOrNullResult()
+                    ;
+
+                $vehicle->setStatus($vehicleStatus);
+                $em->persist($vehicle);
+                $em->flush();
+                continue;
+            }
+
+            if ($now > $limit && $vehicle->getStatus()->getId() == 1) {
+                # alterar status do veiculo
+                $vehicleStatus = $em->getRepository(VehicleStatus::class)
+                        ->createQueryBuilder('e')
+                        ->andWhere('e.status = :status')
+                        ->setParameter('status', 'Retido')
+                        ->getQuery()
+                        ->getOneOrNullResult()
+                    ;
+
+                $vehicle->setStatus($vehicleStatus);
+                $em->persist($vehicle);
+                $em->flush();
+
+                # gerar evento
+                do {
+                $identifier = App\Utils\String\Identifier::database();
+                $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                } while($checkpointByIdentifier instanceof Event);
+
+                $modality = App\DAO::getEventModality($em,'Evento'); 
+                $status = App\DAO::getEventStatus($em,'Em aberto');
+                $category = App\DAO::getEventCategory($em,'Inspeção vencida');
+                $lastEvent =  App\DAO::getLastEvent($em);
+                if ($lastEvent) {
+                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                }else{
+                    $qtt = 0;
+                }
+                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+                $event = (new Event())
+                        ->setCreatedAt(new \DateTime())
+                        ->setUpdatedAt(new \DateTime())
+                        ->setIsActive(true)
+                        ->setIdentifier($identifier)
+                        ->setComment('Inspeção veícular obrigatória vencida.')
+                        ->setVehicle($vehicle)
+                        ->setModality($modality)
+                        ->setStatus($status)
+                        ->setCategory($category)
+                        ->setStart(\DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+                        ->setEnd(null)
+                        ->setLine($trip ? $trip->getLine() : null)
+                        ->setEmployee(null)
+                        ->setProtocol($protocol)
+                        ->setAction(null)
+                        ->setTrip(null)
+                        ->setDriver(null)
+                        ->setCollector(null)
+                        ->setSector($category->getSector())
+                        ->setLocal(null)
+                    ;
+
+                    $em->persist($event);
+                    $em->flush();
+            }
+
+            if ($now > $limit && $vehicle->getStatus()->getId() == 2) {
+                #verificar se ja foi criado evento no dia
+                $category = App\DAO::getEventCategory($em,'Inspeção vencida');
+                $today = (new \DateTime())->setTime(0, 0, 0);
+                $event = $em->getRepository(Event::class)
+                            ->createQueryBuilder('e')
+                            ->andWhere('e.start >= :date')
+                            ->andWhere('e.vehicle >= :vehicle')
+                            ->andWhere('e.category >= :category')
+                            ->setParameter('date', $today)
+                            ->setParameter('vehicle', $vehicle)
+                            ->setParameter('category', $category)
+                            ->getQuery()
+                            ->getResult()
+                        ;
+
+                if (count($event) > 0) {
+                    continue;
+                }else{
+                    # gera evento
+                    do {
+                    $identifier = App\Utils\String\Identifier::database();
+                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                    } while($checkpointByIdentifier instanceof Event);
+
+                    $modality = App\DAO::getEventModality($em,'Evento'); 
+                    $status = App\DAO::getEventStatus($em,'Em aberto');
+                    $category = App\DAO::getEventCategory($em,'Inspeção vencida');
+                    $lastEvent =  App\DAO::getLastEvent($em);
+                    if ($lastEvent) {
+                        $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                    }else{
+                        $qtt = 0;
+                    }
+                    $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+                    $event = (new Event())
+                            ->setCreatedAt(new \DateTime())
+                            ->setUpdatedAt(new \DateTime())
+                            ->setIsActive(true)
+                            ->setIdentifier($identifier)
+                            ->setComment('Inspeção veícular obrigatória vencida.')
+                            ->setVehicle($vehicle)
+                            ->setModality($modality)
+                            ->setStatus($status)
+                            ->setCategory($category)
+                            ->setStart(\DateTime::createFromFormat('Y-m-d H:i:s', $row['date']))
+                            ->setEnd(null)
+                            ->setLine($trip ? $trip->getLine() : null)
+                            ->setEmployee(null)
+                            ->setProtocol($protocol)
+                            ->setAction(null)
+                            ->setTrip(null)
+                            ->setDriver(null)
+                            ->setCollector(null)
+                            ->setSector($category->getSector())
+                            ->setLocal(null)
+                        ;
+
+                        $em->persist($event);
+                        $em->flush();
+                }
+            }
+
+        }
+    }
+    clearstatcache();
+    // Falha no motor
+    // caso checkpoint não tenha Engine durante a viagem
+    
+    $row = json_decode($message->payload, true);
+
+    echo "Received: " . md5($message->payload) . PHP_EOL;
+
+}
+
+//Vila Galvão parametros
+
+// Alta pressão do óleo
+// Baixa pressão do óleo
+// Excesso de temperatura do ar de admissmão            *feito
+// Excesso de temperatura óleo de motor
+// Excesso de temperatura do motor
+// Baixa carga no sistema elétrico
+// Bateria baixa para partida
+// Partida do motor forçada
+// Pós chave ligado com o motor desligado
+// Alternador carregando em alta carga
+// Alternador carregando em baixa carga
+// Excesso de temperatura no óleo de transmissão
+// Veiculo em movimento marcha lenta.
+// Freio de mão acionado com veículo em movimento.
+// Acelerada brusca
+// Curva perigosa a direita
+// Curva perigosa a esquerda
+// Excesso de velocidade                                *feito
+// Freada brusca
+// Acelerador acionado em marcha lenta
+// Rotação acima da faixa mínima de consumo
+// Ociosidade                                           *feito
+// Mata máquina

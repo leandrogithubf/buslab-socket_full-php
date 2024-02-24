@@ -1,0 +1,5 @@
+vendor/
+.php_cs.cache
+var/obd-log/*
+!var/obd-log/.gitkeep
+.php-cs-fixer.cache

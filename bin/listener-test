@@ -1,0 +1,34 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+$pubsub = $redis->pubSubLoop();
+$pubsub->subscribe(
+    'control_channel',
+    'notifications',
+    'filesystem',
+    'database',
+    'alert',
+    'realtime',
+);
+
+foreach ($pubsub as $message) {
+    switch ($message->kind) {
+        case 'subscribe':
+            echo "Subscribed to {$message->channel}", PHP_EOL;
+            break;
+        case 'message':
+            if ($message->channel == 'control_channel') {
+                if ($message->payload == 'quit_loop') {
+                    echo "Aborting pubsub loop...", PHP_EOL;
+                    $pubsub->unsubscribe();
+                } else {
+                    echo "Received an unrecognized command: {$message->payload}.", PHP_EOL;
+                }
+            } else {
+                echo "Received the following message from {$message->channel}:", PHP_EOL, "  {$message->payload}", PHP_EOL, PHP_EOL;
+            }
+            break;
+    }
+}

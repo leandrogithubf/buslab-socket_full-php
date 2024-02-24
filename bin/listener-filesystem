@@ -1,0 +1,19 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+$pubsub = $redis->pubSubLoop();
+$pubsub->subscribe('filesystem');
+
+foreach ($pubsub as $message) {
+    if ($message->kind !== 'message') {
+        continue;
+    }
+
+    echo "Received: " . md5($message->payload) . PHP_EOL;
+
+    $fp = fopen($directories['obd_raw_data'] . '/' . date('YmdH') . '-raw.txt', 'a');
+    fwrite($fp, $message->payload . "\n");
+    fclose($fp);
+}

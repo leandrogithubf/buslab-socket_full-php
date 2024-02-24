@@ -1,0 +1,151 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+if ($argc === 1) {
+    $mode = 'simple';
+} else {
+    $mode = str_replace(['--', '-'], ['', ''], $argv[1]);
+}
+
+if ($mode === 'help' || $mode === 'h') {
+    echo 'Run this script with the following arguments: ' . "\n";
+    echo ' simple => this will run a simple test' . "\n";
+    echo ' wrong => this will run a wrong test' . "\n";
+    echo ' data => this will run a test with some valid data from an OBD' . "\n";
+    echo ' file => this will read the file sent on the second argument' . "\n";
+    echo ' interactive => the STDIN will be connected to the socket: just write and hit enter' . "\n";
+    exit;
+}
+
+if ($mode === 'file') {
+    if ($argc < 3){
+        echo 'You must enter a second argument with a valid filepath' . "\n";
+        exit;
+    }
+
+    if (!file_exists($argv[2])) {
+        echo 'The file must exist' . "\n";
+        exit;
+    }
+}
+
+if (!in_array($mode, ['simple', 'file', 'interactive', 'wrong', 'data', 'direct_realtime'])) {
+    echo 'Run this script with the following arguments: help, wrong, simple, data, file, interactive or direct_realtime' . "\n";
+    exit;
+}
+
+$loop = React\EventLoop\Factory::create();
+
+$connector = (new React\Socket\Connector($loop));
+$stdout = new React\Stream\WritableResourceStream(STDOUT, $loop);
+$stdin = new React\Stream\ReadableResourceStream(STDIN, $loop);
+
+if ($mode === 'simple') {
+    $connector->connect($_ENV['SOCKET_HOST']. ':' . $_ENV['SOCKET_PORT'])
+        ->then(function (React\Socket\ConnectionInterface $connection) use ($loop, $stdout) {
+            echo "Connection established\n";
+
+            $connection->pipe($stdout);
+
+            echo "Sending message (right format as hex)\n";
+            $connection->write('f801018080101010101001852058230852');
+            $connection->end();
+
+            $loop->addTimer(1, function() use ($connection, $loop) {
+                $connection->end();
+                $connection->close();
+                $loop->stop();
+            });
+
+            echo "Connection ended.\n";
+        }, function (Exception $error) use ($loop) {
+            echo "Cannot connect to server: " . $error->getMessage();
+            $loop->stop();
+        })
+    ;
+}
+
+if ($mode === 'wrong') {
+    $connector->connect($_ENV['SOCKET_HOST']. ':' . $_ENV['SOCKET_PORT'])
+        ->then(function (React\Socket\ConnectionInterface $connection) use ($loop, $stdout) {
+            echo "Connection established\n";
+
+            $connection->pipe($stdout);
+
+            echo "Sending message (wrong format)\n";
+            $connection->write("This is wrong :(");
+            $connection->end();
+
+            $loop->addTimer(1, function() use ($connection, $loop) {
+                $connection->end();
+                $connection->close();
+                $loop->stop();
+            });
+
+            echo "Connection ended.\n";
+        }, function (Exception $error) use ($loop) {
+            echo "Cannot connect to server: " . $error->getMessage();
+            $loop->stop();
+        })
+    ;
+}
+
+if ($mode === 'data') {
+    $connector->connect($_ENV['SOCKET_HOST']. ':' . $_ENV['SOCKET_PORT'])
+        ->then(function (React\Socket\ConnectionInterface $connection) use ($loop, $stdout) {
+            echo "Connection established\n";
+
+            $connection->pipe($stdout);
+
+            echo "Sending message (right format with data as hex)\n";
+            $connection->write('f80101035332308161039500000000010efe985dc4fd382d6000000000270f0304024200000404000000000506038616fa21f30711310557410c0ebd310d00312f5d41316dd50814000000250d1139424842473531434146503333333833380f04000000b81005f0000002422922f8f80101035332308161039521543a0e010efe985dc4fd382d6000000000270f03040242000004040000000005060389171421f60711310558410c0e89310d00312f5d41316dd50814000000740f04000000cb1001010a56f8f80101035332308161039521543a3b020b02d40005ffff0fffffff7803040242000004040000000905060386173f21fa071131055e410c2492310d07312f5c41316dd508140000014a0f04000000f70f100101a131f8f80101035332308161039521543a4a020b02d40005ffff0fffffff7803040242000004040000002805060380174721fb0711310561410c1197310d06312f5e41316dd50814000001ad0f0400000107100101fa7bf8f80101035332308161039521543a55020b02d40005ffff0fffffff7803040242000004040000006705060383174b21fb0711310564410c0e7a310d01312f5d41316dd608140000025a0a01020f04000001121005900000000282dff8f80101035332308161039521543a68020b02d40005ffff0fffffff7803040242000004040000006705060383175821fc0711310566410c0e19310d00312f5041316dd60814000002930f0400000125100101dd19f8f80101035332308161039521543a86020b02d40005ffff0fffffff7803040242000004040000006705060386176521fe0711310568410c0e06310d00312f5041316dd60814000002ed0f0400000143100101f383f8f80101035332308161039521543aa4020b02d40005ffff0fffffff7803040242000004040000010905060387177221ff071131056d410c1a48310d1b312f5041316dd60814000003ea0f0400000161100101ac73f8f80101035332308161039521543ac2010efe985dc4fd382d6000250000270f03040242000004040000020205060385178322000711310573410c1af3310d25312f5141316dd60814000005100f040000017f100101b334f8f80101035332308161039521543aea010efe98726afd383d10000b0000270f0304024200000404000002ad05060384179022010711310576410c1844310d0d312f5341316dd60814000005b40f04000001a7100101ee8ef8f80101035332308161039521543afe010efe98726afd383d10000c0000270f03040242000004040000032405060386179c22010711310578410c0fb7310d0b312f5441316dd60814000006210f04000001bb1001017232f8');
+            $connection->write('f80101035332308161039521543bf1010efe987824fd385240000c0000270f0304024200000404000005fb0506037d17d822020711310580410c1622310d0c312f4f41316dd7081400000b7f0f04000002ae100101cccbf8');
+
+            $loop->addTimer(1, function() use ($connection, $loop) {
+                $connection->end();
+                $connection->close();
+                $loop->stop();
+            });
+
+        }, function (Exception $error) use ($loop) {
+            echo "Cannot connect to server: " . $error->getMessage();
+            $loop->stop();
+        })
+    ;
+}
+
+if ($mode === 'interactive') {
+    $connector->connect($_ENV['SOCKET_HOST']. ':' . $_ENV['SOCKET_PORT'])
+        ->then(function (React\Socket\ConnectionInterface $connection) use ($loop, $stdin, $stdout) {
+            echo "Connection established\n";
+
+            $connection->pipe($stdout);
+            $stdin->pipe($connection);
+        }, function (Exception $error) use ($loop) {
+            echo "Cannot connect to server: " . $error->getMessage();
+            $loop->stop();
+        })
+    ;
+}
+
+if ($mode === 'file') {
+    $file = $argv[2];
+
+    $connector->connect($_ENV['SOCKET_HOST']. ':' . $_ENV['SOCKET_PORT'])
+        ->then(function (React\Socket\ConnectionInterface $connection) use ($loop, $stdin, $stdout, $file) {
+            echo "Connection established\n";
+
+            $source = new React\Stream\ReadableResourceStream(fopen($file, 'r'), $loop);
+
+            $source->pipe($connection);
+            $connection->pipe($stdout);
+        }, function (Exception $error) use ($loop) {
+            echo "Cannot connect to server: " . $error->getMessage();
+            $loop->stop();
+        })
+    ;
+}
+
+$loop->run();

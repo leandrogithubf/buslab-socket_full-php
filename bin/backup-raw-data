@@ -1,0 +1,27 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+use Symfony\Component\Finder\Finder;
+use Symfony\Component\Filesystem\Filesystem;
+
+$space = new SpacesConnect($_ENV['DO_SPACE_KEY'], $_ENV['DO_SPACE_SECRET'], $_ENV['DO_SPACE_NAME'], $_ENV['DO_SPACE_REGION']);
+
+$threshold = (new \DateTime());
+$threshold->setTime($threshold->format('H'), 59, 59)->modify('-1 hour');
+
+$filesystem = new Filesystem();
+
+$finder = new Finder();
+$finder->files()->in($directories['obd_raw_data'])->name('*.txt')->date('<= ' . $threshold->format('Y-m-d H:i:s'));
+
+foreach ($finder as $file) {
+    if ($file->getFilename() === date('YmdH') . '-raw.txt') {
+        continue;
+    }
+
+    $space->UploadFile(date('Y/m/d/') . $file->getRelativePathname());
+
+    $filesystem->remove($file->getRealPath());
+}

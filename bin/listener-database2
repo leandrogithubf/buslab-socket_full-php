@@ -1,0 +1,1322 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+use App\Entity\Obd;
+use App\Entity\Vehicle;
+use App\Entity\VehicleStatus;
+use App\Entity\Event;
+use App\Entity\Checkpoint;
+use App\Entity\Schedule;
+use App\Entity\ScheduleDate;
+use App\Entity\Line;
+use App\Entity\LinePoint;
+use App\Entity\Trip;
+use App\Entity\TripStatus;
+use App\Entity\TripModality;
+use App\Entity\Report;
+
+$pubsub = $redis->pubSubLoop();
+$pubsub->subscribe('database');
+
+$obds = App\DAO::getObds($em);
+$vehicles = App\DAO::getVehicles($em);
+$schedulesDates = App\DAO::getSchedulesDate($em);
+$linePointsList = App\DAO::getAllLinePoints($em);
+$started = App\DAO::getTripStatus($em, TripStatus::STARTED);
+$done = App\DAO::getTripStatus($em, TripStatus::DONE);
+$modalityEvento = App\DAO::getEventModality($em,'Evento');
+$statusEmAberto = App\DAO::getEventStatus($em,'Em aberto');
+$categoryAtrasadoChegada = App\DAO::getEventCategory($em,'Atrasado na chegada');
+$categoryAdiantadoChegada = App\DAO::getEventCategory($em,'Adiantado na chegada');
+$categoryViagemNaoRealizada = App\DAO::getEventCategory($em,'Viagem não realizada');
+$lastCheckpoints = App\DAO::getLastCheckpointAllObds($em);
+$timeBD = (new \DateTime())->modify("+2 minutes");
+
+    // $pubsub = [
+    //       [
+    //         "serial" => "862106021148129",
+    //         "date" => "2015-01-09 06:04:22",
+    //         "gps" => [
+    //               "gpsStatus" => [
+    //                 0 => "3D"
+    //               ],
+    //               "latitude" => 22.995442,
+    //               "longitude" => 113.108814,
+    //               "speed" => [
+    //                 "value" => 1,
+    //                 "unit" => "km/h"
+    //               ],
+    //               "angle" => [
+    //                 "value" => 0,
+    //                 "unit" => "degrees"
+    //               ],
+    //               "hdop" => [
+    //                 "value" => 1.06,
+    //                 "description" => "range 0 - 99.99 valor que representa perda de exatidão da coordenada conforme o valor aumenta"
+    //               ]
+    //             ],
+    //         "STT" => [
+    //           0 => "Moving",
+    //           1 => "ACC",
+    //           2 => "Engine",
+    //         ],
+    //         "distance" => [
+    //           "value" => 5389487,
+    //           "unit" => "meters",
+    //         ],
+    //         "ADC" => [
+    //           "Car Battery" => [
+    //             "value" => -14.7900390625,
+    //             "unit" => "(V)",
+    //           ],
+    //           "Device Temp." => [
+    //             "value" => 25.947265625,
+    //             "unit" => "(Celsius)",
+    //           ],
+    //           "Inner Battery" => [
+    //             "value" => 3.93798828125,
+    //             "unit" => "(V)",
+    //           ],
+    //         ],
+    //         "GFS" => [
+    //           "status" =>  [
+    //             0 => [
+    //               0 => 0,
+    //               1 => "O",
+    //             ],
+    //             1 => [
+    //               0 => 1,
+    //               1 => "O",
+    //             ],
+    //             2 => [
+    //               0 => 2,
+    //               1 => "O",
+    //             ],
+    //             3 => [
+    //               0 => 3,
+    //               1 => "O",
+    //             ],
+    //             4 => [
+    //               0 => 4,
+    //               1 => "O",
+    //             ],
+    //             5 => [
+    //               0 => 5,
+    //               1 => "O",
+    //             ],
+    //             6 => [
+    //               0 => 6,
+    //               1 => "O",
+    //             ],
+    //             7 => [
+    //               0 => 7,
+    //               1 => "O",
+    //             ],
+    //             8 => [
+    //               0 => 8,
+    //               1 => "O",
+    //             ],
+    //             9 => [
+    //               0 => 9,
+    //               1 => "O",
+    //             ],
+    //             10 => [
+    //               0 => 10,
+    //               1 => "O",
+    //             ],
+    //             11 => [
+    //               0 => 11,
+    //               1 => "O",
+    //             ],
+    //             12 => [
+    //               0 => 12,
+    //               1 => "O",
+    //             ],
+    //             13 => [
+    //               0 => 13,
+    //               1 => "O",
+    //             ],
+    //             14 => [
+    //               0 => 14,
+    //               1 => "O",
+    //             ],
+    //             15 => [
+    //               0 => 15,
+    //               1 => "O",
+    //             ],
+    //             16 => [
+    //               0 => 16,
+    //               1 => "O",
+    //             ],
+    //             17 => [
+    //               0 => 17,
+    //               1 => "O",
+    //             ],
+    //             18 => [
+    //               0 => 18,
+    //               1 => "O",
+    //             ],
+    //             19 => [
+    //               0 => 19,
+    //               1 => "O",
+    //             ],
+    //             20 => [
+    //               0 => 20,
+    //               1 => "O",
+    //             ],
+    //             21 => [
+    //               0 => 21,
+    //               1 => "O",
+    //             ],
+    //             22 => [
+    //               0 => 22,
+    //               1 => "O",
+    //             ],
+    //             23 => [
+    //               0 => 23,
+    //               1 => "O",
+    //             ],
+    //             24 => [
+    //               0 => 24,
+    //               1 => "O",
+    //             ],
+    //             25 => [
+    //               0 => 25,
+    //               1 => "O",
+    //             ],
+    //             26 => [
+    //               0 => 26,
+    //               1 => "O",
+    //             ],
+    //             27 => [
+    //               0 => 27,
+    //               1 => "O",
+    //             ],
+    //             28 => [
+    //               0 => 28,
+    //               1 => "O",
+    //             ],
+    //             29 => [
+    //               0 => 29,
+    //               1 => "O",
+    //             ],
+    //             30 => [
+    //               0 => 30,
+    //               1 => "O",
+    //             ],
+    //             31 => [
+    //               0 => 31,
+    //               1 => "O",
+    //             ],
+    //           ],
+    //           "alarm" =>  [
+    //             0 => [
+    //               0 => 0,
+    //               1 => "N",
+    //             ],
+    //             1 => [
+    //               0 => 1,
+    //               1 => "N",
+    //             ],
+    //             2 => [
+    //               0 => 2,
+    //               1 => "N",
+    //             ],
+    //             3 => [
+    //               0 => 3,
+    //               1 => "N",
+    //             ],
+    //             4 => [
+    //               0 => 4,
+    //               1 => "N",
+    //             ],
+    //             5 => [
+    //               0 => 5,
+    //               1 => "N",
+    //             ],
+    //             6 => [
+    //               0 => 6,
+    //               1 => "N",
+    //             ],
+    //             7 => [
+    //               0 => 7,
+    //               1 => "N",
+    //             ],
+    //             8 => [
+    //               0 => 8,
+    //               1 => "N",
+    //             ],
+    //             9 => [
+    //               0 => 9,
+    //               1 => "N",
+    //             ],
+    //             10 => [
+    //               0 => 10,
+    //               1 => "N",
+    //             ],
+    //             11 => [
+    //               0 => 11,
+    //               1 => "N",
+    //             ],
+    //             12 => [
+    //               0 => 12,
+    //               1 => "N",
+    //             ],
+    //             13 => [
+    //               0 => 13,
+    //               1 => "N",
+    //             ],
+    //             14 => [
+    //               0 => 14,
+    //               1 => "N",
+    //             ],
+    //             15 => [
+    //               0 => 15,
+    //               1 => "N",
+    //             ],
+    //             16 => [
+    //               0 => 16,
+    //               1 => "N",
+    //             ],
+    //             17 => [
+    //               0 => 17,
+    //               1 => "N",
+    //             ],
+    //             18 => [
+    //               0 => 18,
+    //               1 => "N",
+    //             ],
+    //             19 => [
+    //               0 => 19,
+    //               1 => "N",
+    //             ],
+    //             20 => [
+    //               0 => 20,
+    //               1 => "N",
+    //             ],
+    //             21 => [
+    //               0 => 21,
+    //               1 => "N",
+    //             ],
+    //             22 => [
+    //               0 => 22,
+    //               1 => "N",
+    //             ],
+    //             23 => [
+    //               0 => 23,
+    //               1 => "N",
+    //             ],
+    //             24 => [
+    //               0 => 24,
+    //               1 => "N",
+    //             ],
+    //             25 => [
+    //               0 => 25,
+    //               1 => "N",
+    //             ],
+    //             26 => [
+    //               0 => 26,
+    //               1 => "N",
+    //             ],
+    //             27 => [
+    //               0 => 27,
+    //               1 => "N",
+    //             ],
+    //             28 => [
+    //               0 => 28,
+    //               1 => "N",
+    //             ],
+    //             29 => [
+    //               0 => 29,
+    //               1 => "N",
+    //             ],
+    //             30 => [
+    //               0 => 30,
+    //               1 => "N",
+    //             ],
+    //             31 => [
+    //               0 => 31,
+    //               1 => "N",
+    //             ],
+    //           ],
+    //         ],
+    //         "OBD" => [
+    //           0 => [
+    //             "Engine Coolant Temperature" => 102,
+    //             "unit" => "Celsius"
+    //           ],
+    //           1 => [
+    //             "Engine RPM" => 908,
+    //             "unit" => "rpm"
+    //           ],
+    //           2 => [
+    //             "Vehicle Speed" => 72,
+    //             "unit" => "km/h"
+    //           ],
+    //           3 => [
+    //             "Fuel level" => 55.686274509804,
+    //             "unit" => "%"
+    //           ],
+    //           4 => [
+    //             "Distance traveled since codes cleared" => 1150,
+    //             "unit" => "km"
+    //           ],
+    //         ],
+    //         "FUL" => [
+    //           "id" => 0,
+    //           "Fuel consumption: Algorithm " => 46725508
+    //         ],
+    //       ]
+    //     ];//estrutura em array de saida do socket
+
+    $pubsub = [
+        [
+            "serial" => "359658042004525",
+            "date" => "2015-05-30 01:42:18",
+            "gps" =>  [
+              "gpsStatus" =>  [
+                0 => "3D",
+              ],
+              "latitude" => 22.996064,
+              "longitude" => 113.107961,
+              "speed" =>  [
+                "value" => 0,
+                "unit" => "km/h",
+              ],
+              "angle" =>  [
+                "value" => 0,
+                "unit" => "degrees",
+              ],
+              "hdop" =>  [
+                "value" => 3.94,
+                "description" => "range 0 - 99.99 valor que representa perda de exatidão da coordenada conforme o valor aumenta",
+              ],
+            ],
+            "STT" =>  [
+              0 => "ACC",
+            ],
+            "distance" =>  [
+              "value" => 5717422,
+              "unit" => "meters",
+            ],
+            "ADC" =>  [
+              "Car Battery" =>  [
+                "value" => -16.943359375,
+                "unit" => "(V)",
+              ],
+              "Device Temp." =>  [
+                "value" => 51.2158203125,
+                "unit" => "(Celsius)",
+              ],
+              "Inner Battery" =>  [
+                "value" => 4.04541015625,
+                "unit" => "(V)",
+              ],
+            ],
+            "CAN" =>  [
+              0 =>  [
+                "(R) Electronic Engine Controller 1" =>  [
+                  "PGN" => 61444,
+                  "length" => 8,
+                  "spns" =>  [
+                    "Engine Torque Mode" =>  [
+                      "value" => 15,
+                      "unit" => "",
+                    ],
+                    "(R) Actual Engine - Percent Torque High Resolution" =>  [
+                      "value" => 1.875,
+                      "unit" => "%",
+                    ],
+                    "Drivers Demand Engine" =>  [
+                      "value" => 255,
+                      "unit" => "%",
+                    ],
+                    "Actual Engine" =>  [
+                      "value" => 125,
+                      "unit" => "%",
+                    ],
+                    "Engine Speed" =>  [
+                      "value" => 4016.0,
+                      "unit" => "rpm",
+                    ],
+                    "Source Address of Controlling Device for Engine Control" =>  [
+                      "value" => 255,
+                      "unit" => "",
+                    ],
+                    "Engine Starter Mode" =>  [
+                      "unit" => "",
+                      "value" => 15,
+                      "val_desc" => [
+                        0 =>  [
+                          0 => 0,
+                          1 => "start not requested",
+                            ],
+                        1 =>  [
+                          0 => 1,
+                          1 => "starter active, gear not engaged",
+                            ],
+                        2 =>  [
+                          0 => 2,
+                          1 => "starter active, gear engaged",
+                            ],
+                        3 =>  [
+                          0 => 3,
+                          1 => "start finished; starter not active after having been actively engaged (after 50ms mode goes to 0000)",
+                            ],
+                        4 =>  [
+                          0 => 4,
+                          1 => "starter inhibited due to engine already running",
+                            ],
+                        5 =>  [
+                          0 => 5,
+                          1 => "starter inhibited due to engine not ready for start (preheating)",
+                            ],
+                        6 =>  [
+                          0 => 6,
+                          1 => "starter inhibited due to driveline engaged or other transmission inhibit",
+                            ],
+                        7 =>  [
+                          0 => 7,
+                          1 => "starter inhibited due to active immobilizer",
+                            ],
+                        8 =>  [
+                          0 => 8,
+                          1 => "starter inhibited due to starter over-temp",
+                            ],
+                        9 =>  [
+                          0 => 12,
+                          1 => "starter inhibited - reason unknown",
+                            ],
+                        10 =>  [
+                          0 => 13,
+                          1 => "error (legacy implementation only, use 1110)",
+                            ],
+                        11 =>  [
+                          0 => 14,
+                          1 => "error",
+                            ],
+                        12 =>  [
+                          0 => 15,
+                          1 => "not available",
+                            ],
+                        ],
+                    ],
+                    "Engine Demand" =>  [
+                      "value" => 130,
+                      "unit" => "%",
+                    ],
+                  ],
+                ],
+              ],
+              1 =>  [
+                "Engine Temperature 1" =>  [
+                  "PGN" => 65262,
+                  "length" => 1,
+                  "spns" =>  [
+                    "Engine Coolant Temperature" =>  [
+                      "SPN" => 110,
+                      "value" => 85,
+                      "unit" => "deg C",
+                    ],
+                  ],
+                ],
+              ],
+              2 =>  [
+                "Tachograph" =>  [
+                  "PGN" => 65132,
+                  "length" => 1,
+                  "spns" =>  [
+                    "Vehicle speed" =>  [
+                      "SPN" => 1624,
+                      "value" => 125.5,
+                      "unit" => "km/h",
+                    ],
+                  ],
+                ],
+              ],
+              3 =>  [
+                "Fuel Consumption (Liquid)" =>  [
+                  "PGN" => 65257,
+                  "length" => 2,
+                  "spns" =>  [
+                    "Engine trip fuel" =>  [
+                      "SPN" => 182,
+                      "value" => 167.0,
+                      "unit" => "L",
+                    ],
+                    "Engine total fuel used" =>  [
+                      "SPN" => 250,
+                      "value" => 167.0,
+                      "unit" => "L",
+                    ],
+                  ],
+                ],
+              ],
+              4 =>  [
+                "Electronic Engine Controller 2" =>  [
+                  "PGN" => 61443,
+                  "length" => 1,
+                  "spns" =>  [
+                    "Accelerator Pedal Position" =>  [
+                      "SPN" => 91,
+                      "value" => 50.0,
+                      "unit" => "%",
+                    ],
+                  ],
+                ],
+              ],
+              5 =>  [
+                "(DM1)Active DTCs and lamp status information" =>  [
+                  "PGN" => 65226,
+                  "value" =>  [
+                    "MIL" => "ON",
+                    "RSL" => "OFF",
+                    "AWL" => "OFF",
+                    "PL" => "Unknown",
+                    "values" =>  [
+                      0 =>  [
+                        "DTC0" =>  [
+                          "SPN" => 1208,
+                          "FMI" => 3,
+                          "OC" => 10,
+                        ],
+                      ],
+                    ],
+                  ],
+                ],
+              ],
+            ],
+        ]
+    ];
+
+foreach ($pubsub as $message) {
+    // if ($message->kind !== 'message') {
+    //     continue;
+    // }
+
+    $timeBDRestart = new \DateTime();
+    if ($timeBD < $timeBDRestart) {
+        $obds = App\DAO::getObds($em);
+        $vehicles = App\DAO::getVehicles($em);
+        $schedulesDates = App\DAO::getSchedulesDate($em);
+        $linePointsList = App\DAO::getAllLinePoints($em);
+        $started = App\DAO::getTripStatus($em, TripStatus::STARTED);
+        $done = App\DAO::getTripStatus($em, TripStatus::DONE);
+        $modalityEvento = App\DAO::getEventModality($em,'Evento');
+        $statusEmAberto = App\DAO::getEventStatus($em,'Em aberto');
+        $categoryAtrasadoChegada = App\DAO::getEventCategory($em,'Atrasado na chegada');
+        $categoryAdiantadoChegada = App\DAO::getEventCategory($em,'Adiantado na chegada');
+        $categoryViagemNaoRealizada = App\DAO::getEventCategory($em,'Viagem não realizada');
+        $lastCheckpoints = App\DAO::getLastCheckpointAllObds($em);
+                
+        $timeBD = (new \DateTime())->modify("+2 minutes");
+    }
+
+    echo (new \DateTime())->format('d/m/Y H:i:s') . ": started " . md5($message->payload) . PHP_EOL;
+    $row = $message;
+    // $row = json_decode($message->payload, true);
+
+    echo '    - Checkpoint OBD Device serial: ' . $row['serial'] . PHP_EOL;
+
+    if (!isset($obds[$row['serial']]) || !$obds[$row['serial']] instanceof Obd) {
+        if (!isset($obds[$row['serial']]) || !$obds[$row['serial']] instanceof Obd) {
+            echo '    - Invalid OBD Serial: ' . $row['serial'] . PHP_EOL;
+            continue;
+        }
+    }
+    $obd = $obds[$row['serial']];
+
+    if (!$row['date']) {
+        echo '    - No date signature on package from ' . $row['serial'] . PHP_EOL;
+        continue;
+    }
+    $vehicle = null;
+    foreach ($vehicles as $key => $vehicleList) {
+        if ($vehicleList->getObd()->getId() == $obd->getId()) {
+            $vehicle = $vehicleList;
+            break;
+        }
+    }
+
+    // $vehicle = $em->getRepository(Vehicle::class)->findOneByObd($obd);
+    if (!$vehicle instanceof Vehicle) {
+        echo '    - No vehicle assigned to OBD ' . $row['serial'] . PHP_EOL;
+        continue;
+    }
+
+    $identifier = App\Utils\String\Identifier::database();
+    // do {
+    //     $identifier = App\Utils\String\Identifier::database();
+    //     $checkpointByIdentifier = $em->getRepository('App\Entity\Checkpoint')->findOneByIdentifier($identifier);
+    // } while($checkpointByIdentifier instanceof Checkpoint);
+
+    $date = \DateTime::createFromFormat('Y-m-d H:i:s', $row['date']);
+
+    echo '    - Checkpoint date: ' . $date->format('d/m/Y H:i:s') . PHP_EOL;
+
+    $speedObd = null;
+    $rpm = null;
+    $ect = null;
+    $fuel = null;
+    $map = null;
+    $iat = null;
+    if (isset($row['OBD'])) {
+        foreach ($row['OBD'] as $key => $parameters) {
+            if (isset($parameters['dtc']) || isset($parameters['fuel']) || isset($parameters['airSup']) || isset($parameters['airRdy']) || isset($parameters['Calculated LOAD Value']) || isset($parameters['Short Term Fuel Trim Bank1']) || isset($parameters['Short Term Fuel Trim Bank3']) || isset($parameters['Short Term Fuel service Bank1/Bank3']) || isset($parameters['Long Term Fuel Trim Bank1']) || isset($parameters['Long Term Fuel Trim Bank3']) || isset($parameters['Long Term Fuel service Bank1/Bank3']) || isset($parameters['Short Term Fuel Trim Bank2']) || isset($parameters['Short Term Fuel Trim Bank4']) || isset($parameters['Short Term Fuel service Bank2/Bank4']) || isset($parameters['Long Term Fuel Trim Bank2']) || isset($parameters['Long Term Fuel Trim Bank4']) || isset($parameters['Long Term Fuel service Bank2/Bank4']) || isset($parameters['Fuel Rail Pressure']) || isset($parameters['Ignition Timing Advance for #1 Cylinder']) || isset($parameters['Air Flow Rate from Mass Air Flow Sensor']) || isset($parameters['Absolute Throttle Position']) || isset($parameters['Distance Travelled While MIL is Activated'])) {//ainda não recebido
+                echo 'codificar infos: '.$parameters;
+            }
+            $speedObd = isset($parameters['Vehicle Speed']) ? $parameters['Vehicle Speed'] : null;
+            $rpm = isset($parameters['Engine RPM']) ? $parameters['Engine RPM'] : null;
+            $ect = isset($parameters['Engine Coolant Temperature']) ? $parameters['Engine Coolant Temperature'] : null;
+            $fuel = isset($parameters['Fuel level']) ? $parameters['Fuel level'] : null;
+            $map = isset($parameters['(map)Intake Manifold Absolute Pressure']) ? $parameters['(map)Intake Manifold Absolute Pressure'] : null;
+            $iat = isset($parameters['Intake Air Temperature']) ? $parameters['Intake Air Temperature'] : null;//ainda não recebido
+        }
+    }
+
+    $speedCan = null;
+    if (isset($row['CAN'])) {
+        foreach ($row['CAN'] as $key => $pgns) {
+            if (isset($pgns['Tachograph'])) {
+                $speedCan = $pgns['Tachograph']['spns']['Vehicle speed']['value'];
+            }
+            if (isset($pgns['(R) Electronic Engine Controller 1']) && is_null($rpm)) {
+                $rpm = $pgns['(R) Electronic Engine Controller 1']['spns']['Engine Speed']['value'];
+            }
+            if (isset($pgns['Engine Temperature 1']) && is_null($fuel)) {
+                $ect = $pgns['Engine Temperature 1']['spns']['Engine Coolant Temperature']['value'];
+            }
+        }
+    }
+
+    $speed = null;
+    if (!is_null($speedObd)) {
+        $speed = $speedObd;
+    }
+    if (!is_null($speedCan) && is_null($speed)) {
+        $speed = $speedCan;
+    }
+    if (is_null($speed)) {
+        $speed = (isset($row['gps']['speed']) && $row['gps']['speed']['value'] > 0 ? $row['gps']['speed']['value'] : null);
+
+        if (is_null($speed) && isset($row['gps']) && isset($row['gps']['latitude']) && isset($row['gps']['longitude'])) {
+            $lastCheckpoint = App\DAO::getLastCheckpointFromOBD($em, $obd);
+            $lastCheckpoint = $lastCheckpoints[$obd->getSerial()];
+
+            if (!is_null($row['gps']['latitude']) && !is_null($row['gps']['longitude']) && !is_null($lastCheckpoint->getLongitude()) && !is_null($lastCheckpoint->getLatitude())) {
+                $distance = App\DAO::distance(
+                    $lastCheckpoint->getLatitude(),
+                    $lastCheckpoint->getLongitude(),
+                    $row['gps']['latitude'],
+                    $row['gps']['longitude'],
+                );
+            }else{
+                $distance = 0;
+            }
+
+            if ($distance > 0) {
+                $duration = $date->diff($lastCheckpoint->getDate());
+                if ($duration->h === 0) {// Evita cálculos para tempos maiores que uma hora
+                    $speed = $distance / (($duration->i * 60) + $duration->s); // metros / segundo
+                    $speed *= 3.6; // quilometros / hora
+                    $speed = ceil($speed); // Não ter valores quebrados
+                }
+            }
+        }
+    }
+
+    // criar campos para guardar esses valores?
+    $hvdSpeed = 0;
+    $hvdFuel = 0;
+    $hvdECT = 0;
+    $hvdEngine = 0;
+    $hvdDistance = 0;
+    if (isset($row['HVD'])) {
+        foreach ($row['HVD'] as $key => $parameters) {
+            if (isset($parameters['Road speed'])) {
+                $hvdSpeed = $parameters['Road speed'];
+            }
+            if (isset($parameters['Fuel level'])) {
+                $hvdFuel = $parameters['Engine RPM'];
+            }
+            if (isset($parameters['Engine Coolant Temperature'])) {
+                $hvdECT = $parameters['Engine Coolant Temperature'];
+            }
+            if (isset($parameters['Engine speed'])) {
+                $hvdEngine = $parameters['Engine speed'];
+            }
+            if (isset($parameters['Total Vehicle Distance'])) {
+                $hvdDistance = $parameters['Total Vehicle Distance'];
+            }
+        }
+    }
+
+    $checkpoint = (new Checkpoint())
+        ->setCreatedAt(new \DateTime())
+        ->setIsActive(true)
+        ->setIdentifier($identifier)
+        ->setObd($obd)
+        ->setVehicle($vehicle)
+        ->setDate($date)
+        ->setRpm($rpm)
+        ->setSpeed($speed)
+        ->setFuel($fuel)
+        ->setEct($ect)
+        ->setMap($map)
+        ->setIat($iat)
+    ;
+
+    if (isset($row['gps'])) {
+        $checkpoint
+            ->setLatitude($row['gps']['latitude'])
+            ->setLongitude($row['gps']['longitude'])
+            ->setDistance($row['distance']['value'])
+            ->setAngle($row['gps']['angle']['value'])
+            ->setHdop($row['gps']['hdop']['value'])
+        ;
+    }
+
+    if (isset($row['STT']) && count($row['STT']) > 0) {
+        $checkpoint->setAlerts(implode(', ', $row['STT']));
+    }
+
+    // if (isset($row['obd_errors']) && count($row['obd_errors']) > 0) {
+    //     $checkpoint->setErrors(implode(', ', $row['obd_errors']));
+    // }
+
+    //adicionar campos na tabela do bd
+    // if (isset($row['ADC']) && count($row['ADC']) > 0) {
+    //     foreach ($row['ADC'] as $key => $item) {
+    //         if ($key == 'Car Battery') {
+    //             $checkpoint->setCarBattery($item['value']);
+    //             continue;
+    //         }
+    //         if ($key == 'Device Temp.') {
+    //             $checkpoint->setDeviceTemp($item['value']);
+    //             continue;
+    //         }
+    //         if ($key == 'Inner Battery') {
+    //             $checkpoint->setInnerBattery($item['value']);
+    //             continue;
+    //         }
+    //         if ($key == 'Input voltage') {
+    //             $checkpoint->setInputVoltage($item['value']);
+    //             continue;
+    //         }
+    //         if ($key == 'Inner Battery percent') {
+    //             $checkpoint->setInnerBatteryPercent($item['value']);
+    //             continue;
+    //         }
+    //     }
+    // }
+
+    //can J1939
+    if (isset($row["CAN"])) {
+        foreach ($row['CAN'] as $key => $pgns) {
+                switch ($key) {
+                case '(R) Electronic Engine Controller 1':
+                dump('(R) Electronic Engine Controller 1');
+                die;
+                    $checkpoint
+                    ->setActuelEngineHighResolution(isset($pgns["(R) Actual Engine - Percent Torque High Resolution"])?$pgns["(R) Actual Engine - Percent Torque High Resolution"]['value'] : null)
+                    ->setDriverDemand(isset($pgns["Drivers Demand Engine"])?$pgns["Drivers Demand Engine"]['value'] : null)
+                    ->setActualEngine(isset($pgns["Actual Engine"])?$pgns["Actual Engine"]['value'] : null)
+                    ->setEngineSpeed(isset($pgns["Engine Speed"])?$pgns["Engine Speed"]['value'] : null)
+                    ->setSourceAddress(isset($pgns["Source Address of Controlling Device for Engine Control"])?$pgns["Source Address of Controlling Device for Engine Control"]['value'] : null)
+                    ->setEngineStarterMode(isset($pgns["Engine Starter Mode"])?$pgns["Engine Starter Mode"]['value'] : null)
+                    ->setEngineDemand(isset($pgns["Engine Demand"])?$pgns["Engine Demand"]['value'] : null)
+                    ->setActuelEngineHighResolution(isset($pgns["Engine Torque Mode"])?$pgns["Engine Torque Mode"]['value'] : null)//alterar nome do campo de actual_engine_high_resolution para engine_torque_mode
+                    ;
+                    dump('aqui',$checkpoint);
+                    die;
+                    break;
+                case 'Tachograph':
+                    $checkpoint->setDriverOneWorkingState(isset($pgns["Driver 1 working state"])?$pgns["Driver 1 working state"]['value'] : null)
+                    ->setDriverTwoWorkingState(isset($pgns["Driver 2 working state"])?$pgns["Driver 2 working state"]['value'] : null)
+                    ->setVehicleMotion(isset($pgns["Vehicle motion"])?$pgns["Vehicle motion"]['value'] : null)
+                    ->setDriverOneTimeRelatedStates(isset($pgns["Driver 1 Time Related States"])?$pgns["Driver 1 Time Related States"]['value'] : null)
+                    ->setDriverCardOne(isset($pgns["Driver card, driver 1"])?$pgns["Driver card, driver 1"]['value'] : null)
+                    ->setVehicleOverspeed(isset($pgns["Vehicle Overspeed"])?$pgns["Vehicle Overspeed"]['value'] : null)
+                    ->setDriverTwoTimeRelatedStates(isset($pgns["Driver 2 Time Related States"])?$pgns["Driver 2 Time Related States"]['value'] : null)
+                    ->setDriverCardDriverTwo(isset($pgns["Driver card, driver 2"])?$pgns["Driver card, driver 2"]['value'] : null)
+                    ->setSystemEvent(isset($pgns["System event"])?$pgns["System event"]['value'] : null)
+                    ->setHandlingInformation(isset($pgns["Handling information"])?$pgns["Handling information"]['value'] : null)
+                    ->setTachographPerformance(isset($pgns["Tachograph performance"])?$pgns["Tachograph performance"]['value'] : null)
+                    ->setDirectionIndicator(isset($pgns["Direction indicator"])?$pgns["Direction indicator"]['value'] : null)
+                    ->setTachographOutputShaftSpeed(isset($pgns["Tachograph output shaft speed"])?$pgns["Tachograph output shaft speed"]['value'] : null)
+                    ->setVehicleSpeed(isset($pgns["Tachograph vehicle speed"])?$pgns["Tachograph vehicle speed"]['value'] : null)
+                    ;
+                    break;
+                case 'Wheel Speed Information':
+                    break;
+                case 'High Resolution Vehicle Distance':
+                    $checkpoint->setHrVehicleDistance(isset($pgns["High Resolution Total Vehicle Distance"])?$pgns["High Resolution Total Vehicle Distance"]['value'] : null)
+                    ->setHighResolutionTripDistance(isset($pgns["High Resolution Trip Distance"])?$pgns["High Resolution Trip Distance"]['value'] : null)
+                    ;
+                    break;
+                case 'Vehicle Distance':
+                    $checkpoint->setTripDistance(isset($pgns["Trip Distance"])?$pgns["Trip Distance"]['value'] : null)
+                    ->setVehicleDistance(isset($pgns["Total Vehicle Distance"])?$pgns["Total Vehicle Distance"]['value'] : null)
+                    ;
+                    break;
+                case 'Vehicle Identification':
+                    break;
+                case 'Engine Temperature 1':
+                    $checkpoint->setEngineCoolantTemp(isset($pgns["Engine Coolant Temperature"])?$pgns["Engine Coolant Temperature"]['value'] : null)
+                    ->setEngineFuelTemperatureOne(isset($pgns["Engine Fuel Temperature 1"])?$pgns["Engine Fuel Temperature 1"]['value'] : null)
+                    ->setEngineOilTemperatureOne(isset($pgns["Engine Oil Temperature 1"])?$pgns["Engine Oil Temperature 1"]['value'] : null)
+                    ->setEngineTurbochargerOilTemperature(isset($pgns["Engine Turbocharger Oil Temperature"])?$pgns["Engine Turbocharger Oil Temperature"]['value'] : null)
+                    ->setEngineIntercoolerTemperature(isset($pgns["Engine Intercooler Temperature"])?$pgns["Engine Intercooler Temperature"]['value'] : null)
+                    ->setEngineIntercoolerThermostatOpening(isset($pgns["Engine Intercooler Thermostat Opening"])?$pgns["Engine Intercooler Thermostat Opening"]['value'] : null)
+                    ;
+                    break;
+                case 'Engine Hours, Revolutions':
+                    $checkpoint->setEngineHoursOperation(isset($pgns["Engine Total Hours of Operation"])?$pgns["Engine Total Hours of Operation"]['value'] : null)
+                    ->setEngineTotalRevolutions(isset($pgns["Engine Total Revolutions"])?$pgns["Engine Total Revolutions"]['value'] : null)
+                    ;
+                    break;
+                case 'Vehicle Direction/Speed':
+                    $checkpoint->setCompassBearing(isset($pgns["Compass Bearing"])?$pgns["Compass Bearing"]['value'] : null)
+                    ->setNavigationVehicleSpeed(isset($pgns["Navigation-Based Vehicle Speed"])?$pgns["Navigation-Based Vehicle Speed"]['value'] : null)
+                    ->setPitch(isset($pgns["Pitch"])?$pgns["Pitch"]['value'] : null)
+                    ->setAltitude(isset($pgns["Altitude"])?$pgns["Altitude"]['value'] : null)
+                    ;
+                    break;
+                case 'Fuel Consumption (Liquid)':
+                    $checkpoint->setEngineTripFuel(isset($pgns["Engine Trip Fuel"])?$pgns["Engine Trip Fuel"]['value'] : null)
+                    ->setEngineFuelUsed(isset($pgns["Engine Total Fuel Used"])?$pgns["Engine Total Fuel Used"]['value'] : null)
+                    ;
+                    break;
+                case 'Electronic Engine Controller 2':
+                    $checkpoint->setAcceleratorPedalOneLowSwitch(isset($pgns["Accelerator Pedal 1 Low Idle Switch"])?$pgns["Accelerator Pedal 1 Low Idle Switch"]['value'] : null)
+                    ->setAcceleratorPedalKickdownSwitch(isset($pgns["Accelerator Pedal Kickdown Switch"])?$pgns["Accelerator Pedal Kickdown Switch"]['value'] : null)
+                    ->setRoadSpeedLimitStatus(isset($pgns["Road Speed Limit Status"])?$pgns["Road Speed Limit Status"]['value'] : null)
+                    ->setAcceleratorPedalTwoLowSwitch(isset($pgns["Accelerator Pedal 2 Low Idle Switch"])?$pgns["Accelerator Pedal 2 Low Idle Switch"]['value'] : null)
+                    ->setAccPedalPosition(isset($pgns["Accelerator Pedal Position 1"])?$pgns["Accelerator Pedal Position 1"]['value'] : null)
+                    ->setEnginePercentLoadCurrentSpeed(isset($pgns["Engine Percent Load At Current Speed"])?$pgns["Engine Percent Load At Current Speed"]['value'] : null)
+                    ->setRemoteAcceleratorPedalPosition(isset($pgns["Remote Accelerator Pedal Position"])?$pgns["Remote Accelerator Pedal Position"]['value'] : null)
+                    ->setAcceleratorPedalPositionTwo(isset($pgns["Accelerator Pedal Position 2"])?$pgns["Accelerator Pedal Position 2"]['value'] : null)
+                    ->setVehicleAccelerationRateLimitStatus(isset($pgns["Vehicle Acceleration Rate Limit Status"])?$pgns["Vehicle Acceleration Rate Limit Status"]['value'] : null)
+                    ->setActualMaximumAvailableEngine(isset($pgns["Actual Maximum Available Engine - Percent Torque"])?$pgns["Actual Maximum Available Engine - Percent Torque"]['value'] : null)
+                    ;
+                    break;
+                case 'Component Identification':
+                    break;
+                case 'Engine Fluid Level/Pressure 1':
+                    $checkpoint->setFuelDeliveryPressure(isset($pgns["Engine Fuel Delivery Pressure"])?$pgns["Engine Fuel Delivery Pressure"]['value'] : null)
+                    ->setEngExtendedCrankcasePressure(isset($pgns["Engine Extended Crankcase Blow-by Pressure"])?$pgns["Engine Extended Crankcase Blow-by Pressure"]['value'] : null)
+                    ->setEngineOilLevel(isset($pgns["Engine Oil Level"])?$pgns["Engine Oil Level"]['value'] : null)
+                    ->setEngineOilPressure(isset($pgns["Engine Oil Pressure"])?$pgns["Engine Oil Pressure"]['value'] : null)
+                    ->setEngineCrankcasePressure(isset($pgns["Engine Crankcase Pressure"])?$pgns["Engine Crankcase Pressure"]['value'] : null)
+                    ->setEngineCoolantPressure(isset($pgns["Engine Coolant Pressure"])?$pgns["Engine Coolant Pressure"]['value'] : null)
+                    ->setEngineCoolantLevel(isset($pgns["Engine Coolant Level"])?$pgns["Engine Coolant Level"]['value'] : null)
+                    ;
+                    break;
+                case 'Cruise Control/Vehicle Speed':
+                    $checkpoint->setTwoSpeedAxleSwitch(isset($pgns["Two Speed Axle Switch"])?$pgns["Two Speed Axle Switch"]['value'] : null)
+                    ->setParkingBrakeSwitch(isset($pgns["Parking Brake Switch"])?$pgns["Parking Brake Switch"]['value'] : null)
+                    ->setCruiseControlPauseSwitch(isset($pgns["Cruise Control Pause Switch"])?['value'] : null)
+                    ->setParkBrakeRelease(isset($pgns["Park Brake Release Inhibit Request"])?$pgns["Park Brake Release Inhibit Request"]['value'] : null)
+                    ->setWheelVehicleSpeed(isset($pgns["Wheel-Based Vehicle Speed"])?['value'] : null)
+                    ->setCruiseControlActive(isset($pgns["Cruise Control Active"])?$pgns["Cruise Control Active"]['value'] : null)
+                    ->setCruiseControlEnableSwitch(isset($pgns["Cruise Control Enable Switch"])?$pgns["Cruise Control Enable Switch"]['value'] : null)
+                    ->setBrakeSwitch(isset($pgns["Brake Switch"])?$pgns["Brake Switch"]['value'] : null)
+                    ->setClutchSwitch(isset($pgns["Clutch Switch"])?$pgns["Clutch Switch"]['value'] : null)
+                    ->setCruiseControlSetSwitch(isset($pgns["Cruise Control Set Switch"])?$pgns["Cruise Control Set Switch"]['value'] : null)
+                    ->setCruiseControlCoastSwitch(isset($pgns["Cruise Control Coast (Decelerate) Switch"])?$pgns["Cruise Control Coast (Decelerate) Switch"]['value'] : null)
+                    ->setCruiseControlResumeSwitch(isset($pgns["Cruise Control Resume Switch"])?$pgns["Cruise Control Resume Switch"]['value'] : null)
+                    ->setCruiseControlAccelerateSwitch(isset($pgns["Cruise Control Accelerate Switch"])?$pgns["Cruise Control Accelerate Switch"]['value'] : null)
+                    ->setCruiseControlSetSpeed(isset($pgns["Cruise Control Set Speed"])?$pgns["Cruise Control Set Speed"]['value'] : null)
+                    ->setPtoGovernorState(isset($pgns["(R) PTO Governor State"])?$pgns["(R) PTO Governor State"]['value'] : null)
+                    ->setCruiseControlStates(isset($pgns["Cruise Control States"])?$pgns["Cruise Control States"]['value'] : null)
+                    ->setEngineIdleIncrementSwitch(isset($pgns["Engine Idle Increment Switch"])?$pgns["Engine Idle Increment Switch"]['value'] : null)
+                    ->setEngineIdleDecrementSwitch(isset($pgns["Engine Idle Decrement Switch"])?$pgns["Engine Idle Decrement Switch"]['value'] : null)
+                    ->setEngineTestModeSwitch(isset($pgns["Engine Test Mode Switch"])?$pgns["Engine Test Mode Switch"]['value'] : null)
+                    ->setEngineShutdownOverrideSwitchh(isset($pgns["Engine Shutdown Override Switch"])?$pgns["Engine Shutdown Override Switch"]['value'] : null)
+                    ;
+                    break;
+                case 'Inlet/Exhaust Conditions 1':
+                    $checkpoint->setEngineDieselParticulateFilter(isset($pgns["(R) Engine Diesel Particulate Filter Inlet Pressure"])?$pgns["(R) Engine Diesel Particulate Filter Inlet Pressure"]['value'] : null)
+                    ->setEngineIntakeManifoldPressure(isset($pgns["Engine Intake Manifold #1 Pressure"])?$pgns["Engine Intake Manifold #1 Pressure"]['value'] : null)
+                    ->setengineIntakeManifoldTemperature(isset($pgns["Engine Intake Manifold 1 Temperature"])?$pgns["Engine Intake Manifold 1 Temperature"]['value'] : null)
+                    ->setEngineAirInletPressure(isset($pgns["Engine Air Inlet Pressure"])?$pgns["Engine Air Inlet Pressure"]['value'] : null)
+                    ->setEngineAirFilterDifferentialPressure(isset($pgns["Engine Air Filter 1 Differential Pressure"])?$pgns["Engine Air Filter 1 Differential Pressure"]['value'] : null)
+                    ->setEngineExhaustGasTemperature(isset($pgns["Engine Exhaust Gas Temperature"])?$pgns["Engine Exhaust Gas Temperature"]['value'] : null)
+                    ->setEngineCoolantFilterDifferential(isset($pgns["Engine Coolant Filter Differential Pressure"])?$pgns["Engine Coolant Filter Differential Pressure"]['value'] : null)
+                    ;
+                    break;
+                case 'Vehicle Electrical Power 1':
+                    $checkpoint->setNetBatteryCurrent(isset($pgns["Net Battery Current"])?$pgns["Net Battery Current"]['value'] : null)
+                    ->setAlternatorCurrent(isset($pgns["Alternator Current"])?$pgns["Alternator Current"]['value'] : null)
+                    ->setChargingSystemPotential(isset($pgns["Charging System Potential (Voltage)"])?$pgns["Charging System Potential (Voltage)"]['value'] : null)
+                    ->setBatteryPotentialInput(isset($pgns["Battery Potential / Power Input 1"])?$pgns["Battery Potential / Power Input 1"]['value'] : null)
+                    ->setKeyswitchBatteryPotential(isset($pgns["Keyswitch Battery Potential"])?$pgns["Keyswitch Battery Potential"]['value'] : null)
+                    ;
+                    break;
+                case '(R)Dash Display':
+                    $checkpoint->setWasherFluidLevel(isset($pgns["Washer Fluid Level"])?$pgns["Washer Fluid Level"]['value'] : null)
+                    ->setFuelLevelOne(isset($pgns["(R) Fuel Level 1"])?$pgns["(R) Fuel Level 1"]['value'] : null)
+                    ->setEngineFuelFilterPressure(isset($pgns["Engine Fuel Filter Differential Pressure"])?$pgns["Engine Fuel Filter Differential Pressure"]['value'] : null)
+                    ->setEngineOilFilterPressure(isset($pgns["Engine Oil Filter Differential Pressure"])?$pgns["Engine Oil Filter Differential Pressure"]['value'] : null)
+                    ->setCargoAmbientTemperature(isset($pgns["Cargo Ambient Temperature"])?$pgns["Cargo Ambient Temperature"]['value'] : null)
+                    ->setFuelLevelTwo(isset($pgns["(R) Fuel Level 2"])?$pgns["(R) Fuel Level 2"]['value'] : null)
+                    ;
+                    break;
+                case '(DM1)Active DTCs and lamp status information':
+                    $checkpoint->setMalfunctionIndicatorLampStatusOne(isset($pgns["Malfunction Indicator Lamp Status 1"])?$pgns["Malfunction Indicator Lamp Status 1"]['value'] : null)
+                    ->setRedStopLampStatusOne(isset($pgns["Red Stop Lamp Status 1"])?$pgns["Red Stop Lamp Status 1"]['value'] : null)
+                    ->setAmberWarningLampStatusOne(isset($pgns["Amber Warning Lamp Status 1"])?$pgns["Amber Warning Lamp Status 1"]['value'] : null)
+                    ->setProtectLampStatusOne(isset($pgns["Protect Lamp Status 1"])?$pgns["Protect Lamp Status 1"]['value'] : null)
+                    ->setSpnOne(isset($pgns["SPN 1"])?$pgns["SPN 1"]['value'] : null)
+                    ->setFmiOne(isset($pgns["Failure Mode Identifier (FMI) 1"])?$pgns["Failure Mode Identifier (FMI) 1"]['value'] : null)
+                    ->setOccurrenceCountOne(isset($pgns["Occurrence Count 1"])?$pgns["Occurrence Count 1"]['value'] : null)
+                    ;
+                    break;
+                case '(DM2)Previously active DTCs and lamp status information':
+                    $checkpoint->setMalfunctionIndicatorLampStatusTwo(isset($pgns["Malfunction Indicator Lamp Status 2"])?$pgns["Malfunction Indicator Lamp Status 2"]['value'] : null)
+                    ->setRedStopLampStatusTwo(isset($pgns["Red Stop Lamp Status 2"])?$pgns["Red Stop Lamp Status 2"]['value'] : null)
+                    ->setAmberWarningLampStatusTwo(isset($pgns["Amber Warning Lamp Status 2"])?$pgns["Amber Warning Lamp Status 2"]['value'] : null)
+                    ->setProtectLampStatusTwo(isset($pgns["Protect Lamp Status 2"])?$pgns["Protect Lamp Status 2"]['value'] : null)
+                    ->setSpnTwo(isset($pgns["SPN 2"])?$pgns["SPN 2"]['value'] : null)
+                    ->setFmiTwo(isset($pgns["Failure Mode Identifier (FMI) 2"])?$pgns["Failure Mode Identifier (FMI) 2"]['value'] : null)
+                    ->setOccurrenceCountTwo(isset($pgns["Occurrence Count 2"])?$pgns["Occurrence Count 2"]['value'] : null)
+                    ;
+                    break;
+                default:
+                    // code...
+                    break;
+            }
+        }
+    }
+dump('aqui',$checkpoint);
+die;
+
+    $em->persist($checkpoint);
+    $em->flush();
+
+    unset($lastCheckpoints[$obd->getSerial()]);//
+    $lastCheckpoints += [$obd->getSerial() => $checkpoint];//
+
+//---------------
+    if ($checkpoint->getLatitude() && $checkpoint->getLongitude()) {
+        // $schedulesDate = App\DAO::getSchedulesByDateAndObd($em, $checkpoint->getObd()->getSerial());
+        $schedulesDate = [];
+        foreach ($schedulesDates as $key => $schedulesDateList) {
+            if ($schedulesDatesList->getVehicle()->getObd() == $checkpoint->getObd()) {
+                $schedulesDate=$schedulesDatesList;
+                break;
+            }
+        }
+        if (count($schedulesDate) > 0) {
+            foreach ($schedulesDate as $key => $scheduleDate) {
+                $schedule = $scheduleDate->getSchedule();
+                $startsAtModify = (clone $schedule->getStartsAt())->modify('-30 minute');
+                $endsAtModify = (clone $schedule->getEndsAt())->modify('+30 minute');
+
+                if (
+                    $checkpoint->getDate()->format('Hi') >= $startsAtModify->format('Hi') &&
+                    $checkpoint->getDate()->format('Hi') <= $endsAtModify->format('Hi') &&
+                    $scheduleDate->getVehicle()->getObd() == $checkpoint->getObd()
+                ) {
+                    echo '    - scale found (' . $scheduleDate->getSchedule()->getId() . ')' . PHP_EOL;
+
+                    $line = $scheduleDate->getSchedule()->getLine();
+                    if (!$line) {
+                        echo '    - scale whithout line' . PHP_EOL;
+                        continue;
+                    }
+
+                    // $linePoints = App\DAO::getLinePoints($em, $line);
+                    $linePoints=[];
+                    foreach ($linePointsList as $key => $value) {
+                        if ($value->getLine() == $line) {
+                            array_push($linePoints, $value);
+                        }
+                    }
+                    if (count($linePoints) == 0) {
+                        echo '    - scale whithout line points' . PHP_EOL;
+                        continue;
+                    }
+
+                    $firstPoint = $linePoints[0];
+                    $lastPoint = end($linePoints);
+                    $trip = App\DAO::getTrips($em, $scheduleDate);
+
+                    //verificação de inicio da viagem
+                    //verifica se o checkpoint esta próximo ao primeiro ponto da linha (< 60 metros) e dentro do intervalo de 20 minutos limite de adianto ou atraso
+                    $maxLimitStartTrip = (clone $schedule->getStartsAt())->modify('+20 minute')->format('Hi');
+                    $minLimitStartTrip = (clone $schedule->getStartsAt())->modify('-20 minute')->format('Hi');
+                    if (
+                        App\DAO::distance($checkpoint->getLatitude(), $checkpoint->getLongitude(), $firstPoint->getLatitude(), $firstPoint->getLongitude()) <= 60 &&
+                        $checkpoint->getRpm() > 0 &&
+                        $checkpoint->getDate()->format('Hi') < $maxLimitStartTrip &&
+                        $checkpoint->getDate()->format('Hi') > $minLimitStartTrip
+                    ) {
+                        echo '    - available to init trip' . PHP_EOL;
+                        //verifica se ja foi criada uma viagem, se não, cria
+                        if ($trip) {
+                            echo '    - trip already created, updating start time' . PHP_EOL;
+
+                            // $status = App\DAO::getTripStatus($em, TripStatus::STARTED);
+                            $trip
+                                ->setUpdatedAt(new \DateTime())
+                                ->setStartsAt($checkpoint->getDate())
+                                ->setStatus($started)
+                            ;
+
+                            $em->persist($trip);
+                            $em->flush();
+                            continue;
+                        } else {
+                            echo '    - creating new trip' . PHP_EOL;
+                            do {
+                                $identifier = App\Utils\String\Identifier::database();
+                                $tripByIdentifier = $em->getRepository('App\Entity\Trip')->findOneByIdentifier($identifier);
+                            } while($tripByIdentifier instanceof Trip);
+
+                            // $status = App\DAO::getTripStatus($em, TripStatus::STARTED);
+                            $modality = App\DAO::getTripModality($em, 1);
+
+                            $trip = (new Trip())
+                                ->setCreatedAt(new \DateTime())
+                                ->setUpdatedAt(new \DateTime())
+                                ->setIsActive(true)
+                                ->setIdentifier($identifier)
+                                ->setDriver($scheduleDate->getDriver())
+                                ->setcollector($scheduleDate->getCollector() ? $scheduleDate->getCollector() : null)
+                                ->setVehicle($scheduleDate->getVehicle())
+                                ->setLine($schedule->getLine())
+                                ->setObd($scheduleDate->getVehicle()->getObd())
+                                ->setCompany($scheduleDate->getVehicle()->getCompany())
+                                ->setStartsAt($checkpoint->getDate())
+                                ->setStatus($started)
+                                ->setModality($modality)
+                                ->setScheduleDate($scheduleDate)
+                                ->setReport(null)
+                            ;
+
+                            $em->persist($trip);
+                            $em->flush();
+                            continue;
+                        }
+                    }
+
+                    if ($trip) {
+                        //verificação de fim da viagem
+                        //verifica se o checkpoint esta próximo ao ultimo ponto da linha (< 60 metros)
+                        // $status = App\DAO::getTripStatus($em, TripStatus::STARTED);
+                        $timeLimit = (clone $schedule->getEndsAt())->modify('+20 minute');
+                        if (
+                            (
+                                App\DAO::distance($checkpoint->getLatitude(), $checkpoint->getLongitude(), $lastPoint->getLatitude(), $lastPoint->getLongitude()) <= 60 &&
+                                $trip->getStatus() == $started
+                            )
+                            ||
+                            (
+                                !$trip->getEndsAt() &&
+                                $checkpoint->getDate()->format('Hi') >= $timeLimit->format('Hi')
+                            )
+                        ){
+                            echo '    - trip ended' . PHP_EOL;
+                            // $status = App\DAO::getTripStatus($em, TripStatus::DONE);
+
+                            $trip
+                                ->setStatus($done)
+                                ->setEndsAt($checkpoint->getDate())
+                            ;
+
+                            $report = App\DAO::generateDataReport($em, $trip);
+                            $report = (new Report())
+                                ->setType($report['type'])
+                                ->setConsumption($report['consumption'])
+                                ->setConsumptionReal($report['consumptionReal'])
+                                ->setSpeedAverage($report['speedAverage'])
+                                ->setSpeedMax($report['speedMax'])
+                                ->setDistance($report['distance'])
+                                ->setTripTime($report['tripTime'])
+                                ->setAverageSpeedStops($report['speedAverageNoStop'])
+                                ->setStops($report['checkpointStops'])
+                            ;
+
+                            $em->persist($report);
+
+                            $trip->setReport($report);
+                            $em->persist($trip);
+
+                            $checkpoint->setTrip($trip);
+                            $em->persist($checkpoint);
+
+                            $endLimitLate = ( clone $trip->getScheduleDate()->getSchedule()->getEndsAt())->modify('+5 minutes');
+                            if ($trip->getEndsAt()->format("Hi") > $endLimitLate->format("Hi")) {
+                                echo '    - trip ended more than 5 minutes, creating trip end late event' . PHP_EOL;
+
+                                do {
+                                    $identifier = App\Utils\String\Identifier::database();
+                                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                                } while($checkpointByIdentifier instanceof Event);
+
+                                // $modality = App\DAO::getEventModality($em,'Evento');
+                                // $status = App\DAO::getEventStatus($em,'Em aberto');
+                                // $category = App\DAO::getEventCategory($em,'Atrasado na chegada');
+                                $lastEvent =  App\DAO::getLastEvent($em);
+                                if ($lastEvent) {
+                                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                                } else {
+                                    $qtt = 0;
+                                }
+                                $protocol = substr($row['date'], 0, 4) . substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                                $event = (new Event())
+                                    ->setCreatedAt(new \DateTime())
+                                    ->setUpdatedAt(new \DateTime())
+                                    ->setIsActive(true)
+                                    ->setIdentifier($identifier)
+                                    ->setComment('')
+                                    ->setVehicle($trip->getVehicle())
+                                    ->setModality($modalityEvento)
+                                    ->setStatus($statusEmAberto)
+                                    ->setCategory($categoryAtrasadoChegada)
+                                    ->setStart($trip->getEndsAt())
+                                    ->setEnd($trip->getEndsAt())
+                                    ->setLine($trip->getline())
+                                    ->setEmployee(null)
+                                    ->setProtocol($protocol)
+                                    ->setAction(null)
+                                    ->setTrip($trip)
+                                    ->setDriver($trip->getDriver())
+                                    ->setCollector($trip->getCollector() ? $trip->getCollector() : null)
+                                    ->setSector($category->getSector())
+                                    ->setLocal(null)
+                                ;
+
+                                $em->persist($event);
+                            }
+
+                            $endLimitEarly = ( clone $trip->getScheduleDate()->getSchedule()->getEndsAt())->modify('-5 minutes');
+                            if ($trip->getEndsAt()->format("Hi") < $endLimitEarly->format("Hi")) {
+                                echo '    - trip ended less than 5 minutes, creating trip end early event' . PHP_EOL;
+
+                                do {
+                                    $identifier = App\Utils\String\Identifier::database();
+                                    $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                                } while($checkpointByIdentifier instanceof Event);
+
+                                // $modality = App\DAO::getEventModality($em,'Evento');
+                                // $status = App\DAO::getEventStatus($em,'Em aberto');
+                                // $category = App\DAO::getEventCategory($em,'Adiantado na chegada');
+                                $lastEvent =  App\DAO::getLastEvent($em);
+                                if ($lastEvent) {
+                                    $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                                } else {
+                                    $qtt = 0;
+                                }
+                                $protocol = substr($row['date'], 0, 4). substr($row['date'], 5, 2) . substr($row['date'], 8, 2).'-'.str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                                $event = (new Event())
+                                    ->setCreatedAt(new \DateTime())
+                                    ->setUpdatedAt(new \DateTime())
+                                    ->setIsActive(true)
+                                    ->setIdentifier($identifier)
+                                    ->setComment('')
+                                    ->setVehicle($trip->getVehicle())
+                                    ->setModality($modalityEvento)
+                                    ->setStatus($statusEmAberto)
+                                    ->setCategory($categoryAdiantadoChegada)
+                                    ->setStart($trip->getEndsAt())
+                                    ->setEnd($trip->getEndsAt())
+                                    ->setLine($trip->getline())
+                                    ->setEmployee(null)
+                                    ->setProtocol($protocol)
+                                    ->setAction(null)
+                                    ->setTrip($trip)
+                                    ->setDriver($trip->getDriver())
+                                    ->setCollector($trip->getCollector() ? $trip->getCollector() : null)
+                                    ->setSector($category->getSector())
+                                    ->setLocal(null)
+                                ;
+
+                                $em->persist($event);
+                            }
+
+                            $em->flush();
+                        }
+
+                        //Apenas adiciona o checkpoint na viagem em andamento
+                        $timeLimit = (clone $schedule->getEndsAt())->modify('+20 minute');
+                        if (
+                            !$trip->getEndsAt() &&
+                            $checkpoint->getDate()->format('Hi') < $timeLimit->format('Hi')
+                        ) {
+                            echo '    - checkpoint added to trip in progress' . PHP_EOL;
+                            $checkpoint->setTrip($trip);
+                            $em->persist($checkpoint);
+                            $em->flush();
+                        }
+                    } else {
+                        //Gera evento de viagem não realizada se tiver passado de 20 minutos
+                        $scheduleStart = (clone $scheduleDate->getDate())->setTime($scheduleDate->getSchedule()->getStartsAt()->format('H'),$scheduleDate->getSchedule()->getStartsAt()->format('i'),0);
+                        $timeLimit = (clone $scheduleStart)->modify('+20 minute');
+                        if ($checkpoint->getDate() > $timeLimit) {
+                            echo '    - trip not yet started and closed for a time limit of 20 minutes' . PHP_EOL;
+
+                            //verifica se ja foi gerado um evento desse
+                            $event = App\DAO::getLastEventExistByCategory($em, 'Viagem não realizada', $scheduleDate->getVehicle());
+
+                            if ($event) {
+                                echo '    - event trip not generated already exists' . PHP_EOL;
+                                continue;
+                            }
+
+                            echo '    - creating event trip not generated' . PHP_EOL;
+
+                            do {
+                                $identifier = App\Utils\String\Identifier::database();
+                                $checkpointByIdentifier = $em->getRepository('App\Entity\Event')->findOneByIdentifier($identifier);
+                            } while($checkpointByIdentifier instanceof Event);
+
+                            // $modality = App\DAO::getEventModality($em,'Evento');
+                            // $status = App\DAO::getEventStatus($em,'Em aberto');
+                            // $category = App\DAO::getEventCategory($em,'Viagem não realizada');
+                            $lastEvent =  App\DAO::getLastEvent($em);
+                            if ($lastEvent) {
+                                $qtt = intval(substr($lastEvent->getProtocol(),9,5))+1;
+                            } else {
+                                $qtt = 0;
+                            }
+                            $protocol = substr($row['date'], 0, 4) . substr($row['date'], 5, 2) . substr($row['date'], 8, 2) . '-' . str_repeat('0', 5 - strlen($qtt)) . $qtt;
+
+                            $event = (new Event())
+                                ->setCreatedAt(new \DateTime())
+                                ->setUpdatedAt(new \DateTime())
+                                ->setIsActive(true)
+                                ->setIdentifier($identifier)
+                                ->setComment('A viagem não foi realizada')
+                                ->setVehicle($scheduleDate->getVehicle())
+                                ->setModality($modalityEvento)
+                                ->setStatus($statusEmAberto)
+                                ->setCategory($categoryViagemNaoRealizada)
+                                ->setStart($checkpoint->getDate())
+                                ->setEnd($checkpoint->getDate())
+                                ->setLine($line)
+                                ->setEmployee(null)
+                                ->setProtocol($protocol)
+                                ->setAction(null)
+                                ->setTrip(null)
+                                ->setDriver($scheduleDate->getDriver())
+                                ->setCollector($scheduleDate->getCollector() ? $scheduleDate->getCollector() : null)
+                                ->setSector($category->getSector())
+                                ->setLocal(null)
+                            ;
+
+                            $em->persist($event);
+                            $em->flush();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    echo (new \DateTime())->format('d/m/Y H:i:s') . ": ended " . md5($message->payload) . PHP_EOL;
+}

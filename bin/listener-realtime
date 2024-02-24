@@ -1,0 +1,478 @@
+#!usr/bin/env php
+<?php
+
+require_once(__DIR__ . '/../app.php');
+
+use App\Entity\Company;
+use App\Entity\Event;
+use App\Entity\EventCategory;
+use App\Entity\EventStatus;
+use App\Entity\Line;
+use App\Entity\LinePoint;
+use App\Entity\Obd;
+use App\Entity\Schedule;
+use App\Entity\ScheduleDate;
+use App\Entity\Trip;
+use App\Entity\TripModality;
+use App\Entity\TripStatus;
+use App\Entity\Vehicle;
+use App\SocketIoEmitter;
+
+$pubsub = $redis->pubSubLoop();
+$pubsub->subscribe('realtime');
+
+$loadedAt = new \DateTime();
+
+$obds = App\DAO::getObds($em);
+$vehicles = App\DAO::getVehicles($em);
+$schedules = App\DAO::getSchedules($em);
+
+foreach ($pubsub as $message) {
+    if ($message->kind !== 'message') {
+        continue;
+    }
+
+    if ($loadedAt->diff(new \DateTime())->s + ($loadedAt->diff(new \DateTime())->i*60) >= 120) {
+        $vehicles = App\DAO::getVehicles($em);
+        $loadedAt = new \DateTime();
+    }
+
+    $row = json_decode($message->payload, true);    
+
+    if (!isset($obds[$row['serial']]) || !$obds[$row['serial']] instanceof Obd) {
+        $obds = App\DAO::getObds($em);
+        if (!isset($obds[$row['serial']]) || !$obds[$row['serial']] instanceof Obd) {
+            echo 'Invalid OBD Serial: ' . $row['serial'] . "\n";
+            continue;
+        }
+    }
+    $obd = $obds[$row['serial']];
+
+    if (empty($row['date'])) {
+        echo 'No date signature on package from ' . $row['serial'] . "\n";
+        continue;
+    }
+
+    $date = \DateTime::createFromFormat('Y-m-d H:i:s', $row['date']);
+    $speed = (isset($row['spd']) ? ['value' => $row['spd']['value'], 'unit' => 'Km/h'] : null);
+    if (is_null($speed)) {
+        $speed = (isset($row['gps']['speed']) && $row['gps']['speed']['value'] > 0 ? $row['gps']['speed'] : null);
+
+        if (is_null($speed) && isset($row['gps']) && isset($row['gps']['latitude']) && isset($row['gps']['longitude'])) {
+            $lastCheckpoint = App\DAO::getLastCheckpointFromOBD($em, $obd);
+
+            $distance = App\DAO::distance(
+                $lastCheckpoint->getLatitude(),
+                $lastCheckpoint->getLongitude(),
+                $row['gps']['latitude'],
+                $row['gps']['longitude'],
+            );
+
+            if ($distance > 0) {
+                $duration = $date->diff($lastCheckpoint->getDate());
+                if ($duration->h === 0) {// Evita cálculos para tempos maiores que uma hora
+                    $speed = $distance / (($duration->i * 60) + $duration->s); // metros / segundo
+                    $speed *= 3.6; // quilometros / hora
+                    $speed = ['value' => ceil($speed), 'unit' => 'Km/h']; // Não ter valores quebrados
+                }
+            }
+        }
+    }
+
+    $redisPublisher->publish('obd', json_encode([
+        'now' => date('Y-m-d H:i:s'),
+        'date' => $row['date'],
+        'serial' => $row['serial'],
+        'latitude' => isset($row['gps']) ? $row['gps']['latitude'] : null,
+        'longitude' => isset($row['gps']) ? $row['gps']['longitude'] : null,
+        'speed' => $speed,
+        'rpm' => isset($row['rpm']) ? $row['rpm'] : null,
+    ]));
+
+    //(new SocketIoEmitter())->connect(($_ENV['SOCKETIO_HOST'] ?? $_SERVER['SOCKETIO_HOST']), ($_ENV['SOCKETIO_PORT'] ?? $_SERVER['SOCKETIO_PORT']), 'obd', json_encode([
+    //    'now' => date('Y-m-d H:i:s'),
+    //    'date' => $row['date'],
+    //    'serial' => $row['serial'],
+    //    'latitude' => isset($row['gps']) ? $row['gps']['latitude'] : null,
+    //    'longitude' => isset($row['gps']) ? $row['gps']['longitude'] : null,
+    //    'speed' => $speed,
+    //    'rpm' => isset($row['rpm']) ? $row['rpm'] : null,
+    //]));
+
+    $vehicle = null;
+    foreach ($vehicles as $key => $vehicleOBD) {
+        if ($vehicleOBD->getObd()->getId() == $obd->getId()) {
+            $vehicle = $vehicleOBD;
+            break;
+        }
+    }
+
+    if (!$vehicle instanceof \App\Entity\Vehicle) {
+        echo 'No vehicle assigned to OBD ' . $row['serial'] . "\n";
+        continue;
+    }
+
+    if (!isset($row['gps'], $row['gps']['latitude'], $row['gps']['longitude'])) {
+        echo 'No GPS information ' . $row['serial'] . "\n";
+        continue;
+    }
+
+    if (!isset($schedules[$row['serial']]) || count($schedules[$row['serial']]) === 0) {
+        $schedules = App\DAO::getSchedules($em);
+    }
+
+    $status = 'OFF_ROUTE';
+    $line = null;
+    $driver = null;
+    $trip = null;
+    if (isset($schedules[$row['serial']]) && count($schedules[$row['serial']]) > 0) {
+        foreach ($schedules[$row['serial']] as $schedule) {
+            $date = \DateTime::createFromFormat('Y-m-d H:i:s', $row['date']);
+            if ($date->format('H:i') >= $schedule->getStartsAt()->format('H:i') && $date->format('H:i') <= $schedule->getEndsAt()->format('H:i')) {
+                $status = 'IN_ROUTE';
+                $line = $schedule->getLine() ? $schedule->getLine(): null;
+                $driver = $schedule->getDriver() ? $schedule->getDriver() : null;
+                $trip = App\DAO::getTripByVehicle($em, $vehicle);
+            }
+        }
+    }
+
+    $can = null;
+    if (isset($row['can'])) {
+        $can = $row['can'];
+    }
+    if (is_null($trip)) {
+        $socket = json_encode([
+                'now' => date('Y-m-d H:i:s'),
+                'date' => $row['date'],
+                'prefix' => $vehicle->getPrefix(),
+                'identifier' => $vehicle->getIdentifier(),
+                'company' => $vehicle->getCompany()->getIdentifier(),
+                'color' => $vehicle->getCompany()->getColor() ? $vehicle->getCompany()->getColor() : '#1132d6',
+                'driver' => null,
+                'driverIdentifier' => null,
+                'line' => null,
+                'lineIdentifier' => null,
+                'latitude' => $row['gps']['latitude'],
+                'longitude' => $row['gps']['longitude'],
+                'speed' => $speed,
+                'rpm' => isset($row['rpm']) ? $row['rpm'] : null,
+                'status' => $status,
+                'lastPoint' => null,
+                'tripIdentifier' => null,
+                'temperatura' => isset($row['obd'])  ? (isset($row['obd']['ect']) ? $row['obd']['ect']['value']: null) : null,
+                'address' => null,
+                'obdIdentifier' => $obd->getIdentifier(),
+                'can' => $can,
+                'fullData' => $row,
+            ]);
+        $socketio = str_replace(['\u2013','\u', "'"], '-',$socket);
+        $status = 'OFF_ROUTE';
+        
+        $redisPublisher->publish('position', $socketio);
+
+        //(new SocketIoEmitter())->connect((($_ENV['SOCKETIO_HOST'] ?? $_SERVER['SOCKETIO_HOST']) ?? $_SERVER['SOCKETIO_HOST']), ($_ENV['SOCKETIO_PORT'] ?? $_SERVER['SOCKETIO_PORT']), 'position', $socketio);
+
+    }else{
+        $lastPoint = 0;
+        $lastDistance = 0;
+        if (!is_null($line)) {
+            $linePoints = $line->getPoints();
+            if (count($linePoints) > 0) {
+                foreach ($linePoints as $key => $point) {
+
+                    $address = null;
+                    $distance = App\DAO::distance($row['gps']['latitude'],$row['gps']['longitude'],$point->getLatitude(),$point->getLongitude());
+                    if ($lastDistance == 0 || $distance <= $lastDistance) {
+                        $lastPoint = $key;
+                        $lastDistance = $distance;
+                        $address = $point->getAddress();
+                    }
+                }
+            }
+        }
+
+        $redisPublisher->publish('position', json_encode([
+            'now' => date('Y-m-d H:i:s'),
+            'date' => $row['date'],
+            'prefix' => $vehicle->getPrefix(),
+            'identifier' => $vehicle->getIdentifier(),
+            'company' => $vehicle->getCompany()->getIdentifier(),
+            'color' => $vehicle->getCompany()->getColor() ? $vehicle->getCompany()->getColor() : '#1132d6',
+            'driver' => $driver ? $driver->getName() : null,
+            'driverIdentifier' => $driver ? $driver->getIdentifier() : null,
+            'line' => $line ? $line->getCode() : null,
+            'lineIdentifier' => $line ? $line->getIdentifier() : null,
+            'latitude' => $row['gps']['latitude'],
+            'longitude' => $row['gps']['longitude'],
+            'speed' => $speed,
+            'rpm' => isset($row['rpm']) ? $row['rpm'] : null,
+            'status' => $status,
+            'lastPoint' => $lastPoint,
+            'tripIdentifier' => $trip ? $trip->getIdentifier() : null,
+            'temperatura' => isset($row['obd'])  ? $row['obd']['ect']['value'] : null,
+            'address' => is_null($address) ? null : $address,
+            'obdIdentifier' => $obd->getIdentifier(),
+            'can' => $can,
+            'fullData' => $row,
+        ]));
+
+        //(new SocketIoEmitter())->connect((($_ENV['SOCKETIO_HOST'] ?? $_SERVER['SOCKETIO_HOST']) ?? $_SERVER['SOCKETIO_HOST']), ($_ENV['SOCKETIO_PORT'] ?? $_SERVER['SOCKETIO_PORT']), 'position', json_encode([
+        //        'now' => date('Y-m-d H:i:s'),
+        //        'date' => $row['date'],
+        //        'prefix' => $vehicle->getPrefix(),
+        //        'identifier' => $vehicle->getIdentifier(),
+        //        'company' => $vehicle->getCompany()->getIdentifier(),
+        //        'color' => $vehicle->getCompany()->getColor() ? $vehicle->getCompany()->getColor() : '#1132d6',
+        //        'driver' => $driver ? $driver->getName() : null,
+        //        'driverIdentifier' => $driver ? $driver->getIdentifier() : null,
+        //        'line' => $line ? $line->getCode() : null,
+        //        'lineIdentifier' => $line ? $line->getIdentifier() : null,
+        //        'latitude' => $row['gps']['latitude'],
+        //        'longitude' => $row['gps']['longitude'],
+        //        'speed' => $speed,
+        //        'rpm' => isset($row['rpm']) ? $row['rpm'] : null,
+        //        'status' => $status,
+        //        'lastPoint' => $lastPoint,
+        //        'tripIdentifier' => $trip ? $trip->getIdentifier() : null,
+        //        'temperatura' => isset($row['obd'])  ? $row['obd']['ect']['value'] : null,
+        //        'address' => is_null($address) ? null : $address,
+        //        'obdIdentifier' => $obd->getIdentifier(),
+        //        'can' => $can,
+        //        'fullData' => $row,
+        //    ]));
+    }
+
+    refreshPlacar($em);
+
+    echo "Received: " . md5($message->payload) . PHP_EOL;
+}
+
+function refreshPlacar($em)
+{   
+    global $redisPublisher;
+    $now = (new \DateTime());
+    $start = (clone $now)->setTime(0, 0, 0);
+
+    $scheduleDateStart = $em
+        ->getRepository(ScheduleDate::class)
+        ->createQueryBuilder('e')
+        ->innerJoin(Schedule::class, 'schedule', 'WITH', 'e.schedule = schedule.id')
+        ->andWhere('schedule.modality = :modality')
+        ->andWhere('schedule.dataValidity <= :start')
+        ->setParameter('modality', 'STARTING_OPERATION')
+        ->setParameter('start', $start)
+        ->orderBy('e.id', 'DESC')
+        ->setMaxResults(1)
+        ->getQuery()
+        ->getResult()
+    ;
+
+    $startOperational = (clone $now)->modify('-1 day');
+    if (count($scheduleDateStart) > 0) {
+        if ($scheduleDateStart[0]->getDate()->format('Y-m-d') < $startOperational->format('Y-m-d')) {
+
+            $redisPublisher->publish('placar', json_encode([
+                'hasData' => false,
+            ]));
+
+            //(new SocketIoEmitter())
+            //    ->connect((($_ENV['SOCKETIO_HOST'] ?? $_SERVER['SOCKETIO_HOST']) ?? $_SERVER['SOCKETIO_HOST']), ($_ENV['SOCKETIO_PORT'] ?? $_SERVER['SOCKETIO_PORT']), 'placar', json_encode([
+            //        'hasData' => false,
+            //    ]))
+            //;
+            return;
+        }
+
+        $inicialTrip = $em
+            ->getRepository(Trip::class)
+            ->createQueryBuilder('e')
+            ->andWhere('e.scheduleDate = :schedule')
+            ->setParameter('schedule', $scheduleDateStart[0])
+            ->getQuery()
+            ->getOneOrNullResult()
+        ;
+
+        if (!$inicialTrip) {
+            $redisPublisher->publish('placar', json_encode([
+                'hasData' => false,
+            ]));
+
+            //(new SocketIoEmitter())
+            //    ->connect(($_ENV['SOCKETIO_HOST'] ?? $_SERVER['SOCKETIO_HOST']), ($_ENV['SOCKETIO_PORT'] ?? $_SERVER['SOCKETIO_PORT']), 'placar', json_encode([
+            //        'hasData' => false,
+            //    ]))
+            //;
+            return;
+        }
+
+        $startScore = (clone $scheduleDateStart[0]->getDate())->setTime(intval($scheduleDateStart[0]->getSchedule()->getStartsAt()->format('H')), intval($scheduleDateStart[0]->getSchedule()->getStartsAt()->format('i')), 0);
+
+        $arrayAcidentesId = [19, 20];
+        $idAcidente = $em
+            ->getRepository(EventCategory::class)
+            ->createQueryBuilder('e')
+            ->andWhere('e.id IN (:acidentes)')
+            ->setParameter('acidentes', $arrayAcidentesId)
+            ->getQuery()
+            ->getResult()
+        ;
+
+        $eventStatusIds = [2, 4];
+        $idStatus = $em
+            ->getRepository(EventStatus::class)
+            ->createQueryBuilder('e')
+            ->andWhere('e.id IN (:status)')
+            ->setParameter('status', $eventStatusIds)
+            ->getQuery()
+            ->getResult()
+        ;
+
+        $qttTripScheduled = $em
+            ->getRepository(Trip::class)
+            ->createQueryBuilder('e')
+            ->select('COUNT(e.id)')
+            ->andWhere('e.status = :status')
+            ->andWhere('e.modality = :modality')
+            ->andWhere('e.id >= :id')
+            ->setParameter('id', $inicialTrip)
+            ->setParameter('status', TripStatus::DONE)
+            ->setParameter('modality', TripModality::SCHEDULED)
+        ;
+
+        $qttTripUnscheduled = $em
+            ->getRepository(Trip::class)
+            ->createQueryBuilder('e')
+            ->select('COUNT(e.id)')
+            ->andWhere('e.status = :status')
+            ->andWhere('e.modality = :modality')
+            ->andWhere('e.id >= :id')
+            ->setParameter('id', $inicialTrip)
+            ->setParameter('status', TripStatus::DONE)
+            ->setParameter('modality', TripModality::UNSCHEDULED)
+        ;
+
+        $qttTripNonProductive = $em
+            ->getRepository(Trip::class)
+            ->createQueryBuilder('e')
+            ->select('COUNT(e.id)')
+            ->andWhere('e.status = :status')
+            ->andWhere('e.modality = :modality')
+            ->andWhere('e.id >= :id')
+            ->setParameter('id', $inicialTrip)
+            ->setParameter('status', TripStatus::NON_PRODUCTIVE)
+            ->setParameter('modality', TripModality::SCHEDULED)
+        ;
+
+        $qttAccidentEvent = $em
+            ->getRepository(Event::class)
+            ->createQueryBuilder('e')
+            ->innerJoin(Vehicle::class, 'vehicle', 'WITH', 'e.vehicle = vehicle.id')
+            ->select('COUNT(e.id)')
+            ->andWhere('e.start >= :start')
+            ->andWhere('e.category IN (:acidentes)')
+            ->setParameter('start', $inicialTrip->getStartsAt())
+            ->setParameter('acidentes', $idAcidente)
+        ;
+
+        $qttEventsUnsolved = $em
+            ->getRepository(Event::class)
+            ->createQueryBuilder('e')
+            ->innerJoin(Vehicle::class, 'vehicle', 'WITH', 'e.vehicle = vehicle.id')
+            ->select('COUNT(e.id)')
+            ->andWhere('e.start >= :start')
+            ->andWhere('e.status IN (:status)')
+            ->setParameter('start', $inicialTrip->getStartsAt())
+            ->setParameter('status', $idStatus)
+        ;
+
+        $qttScheduledDate = $em
+            ->getRepository(ScheduleDate::class)
+            ->createQueryBuilder('e')
+            ->innerJoin(Schedule::class, 'schedule', 'WITH', 'schedule.id = e.schedule')
+            ->select('COUNT(e.id)')
+            ->andWhere('e.date >= :start')
+            ->andWhere('schedule.startsAt >= :startTime')
+            ->setParameter('start', $startScore->format('Y-m-d'))
+            ->setParameter('startTime', $startScore->format('H:i:s'))
+            ->orderBy('e.id', 'ASC')
+        ;
+
+        $qttTripNonProductiveData = $qttTripNonProductive->getQuery()->getSingleScalarResult();
+        $qttTripUnscheduledData = $qttTripUnscheduled->getQuery()->getSingleScalarResult();
+        $qttTripScheduledData = $qttTripScheduled->getQuery()->getSingleScalarResult();
+        $qttAccidentEventData = $qttAccidentEvent->getQuery()->getSingleScalarResult();
+        $qttEventsUnsolvedData = $qttEventsUnsolved->getQuery()->getSingleScalarResult();
+        $qttScheduledDateData = $qttScheduledDate->getQuery()->getSingleScalarResult();
+        $qttTripScheduledNotDoneData = $qttScheduledDateData - $qttTripScheduledData;
+    } else {
+        $qttTripNonProductiveData = 0;
+        $qttTripUnscheduledData = 0;
+        $qttTripScheduledData = 0;
+        $qttAccidentEventData = 0;
+        $qttEventsUnsolvedData = 0;
+        $qttScheduledDateData = 0;
+        $qttTripScheduledNotDoneData = 0;
+    }
+
+    $allCompaniesData = [
+        'qttTripScheduled' => $qttTripScheduledData ?? 0,
+        'qttTripScheduledNotDone' => $qttTripScheduledNotDoneData ?? 0,
+        'qttTripNonProductive' => $qttTripNonProductiveData ?? 0,
+        'qttTripUnscheduled' => $qttTripUnscheduledData ?? 0,
+        'qttAccidentEvent' => $qttAccidentEventData ?? 0,
+        'qttEventsUnsolved' => $qttEventsUnsolvedData ?? 0,
+    ];
+
+    $companiesData = [];
+
+    $companies = $em->getRepository(Company::class)->findAll();
+    foreach ($companies as $company) {
+        if (count($scheduleDateStart) > 0) {
+            $qttTripNonProductive = (clone $qttTripNonProductive)->andWhere('e.company = :company')->setParameter('company', $company);
+            $qttTripUnscheduled = (clone $qttTripUnscheduled)->andWhere('e.company = :company')->setParameter('company', $company);
+            $qttTripScheduled = (clone $qttTripScheduled)->andWhere('e.company = :company')->setParameter('company', $company);
+            $qttAccidentEvent = (clone $qttAccidentEvent)->andWhere('vehicle.company = :company')->setParameter('company', $company);
+            $qttEventsUnsolved = (clone $qttEventsUnsolved)->andWhere('vehicle.company = :company')->setParameter('company', $company);
+            $qttScheduledDate = (clone $qttScheduledDate)->andWhere('schedule.company = :company')->setParameter('company', $company);
+
+            $qttTripNonProductiveData = $qttTripNonProductive->getQuery()->getSingleScalarResult();
+            $qttTripUnscheduledData = $qttTripUnscheduled->getQuery()->getSingleScalarResult();
+            $qttTripScheduledData = $qttTripScheduled->getQuery()->getSingleScalarResult();
+            $qttAccidentEventData = $qttAccidentEvent->getQuery()->getSingleScalarResult();
+            $qttEventsUnsolvedData = $qttEventsUnsolved->getQuery()->getSingleScalarResult();
+            $qttScheduledDateData = $qttScheduledDate->getQuery()->getSingleScalarResult();
+            $qttTripScheduledNotDoneData = $qttScheduledDateData - $qttTripScheduledData;
+        } else {
+            $qttTripNonProductiveData = 0;
+            $qttTripUnscheduledData = 0;
+            $qttTripScheduledData = 0;
+            $qttAccidentEventData = 0;
+            $qttEventsUnsolvedData = 0;
+            $qttScheduledDateData = 0;
+            $qttTripScheduledNotDoneData = 0;
+        }
+
+        $companiesData[$company->getIdentifier()] = [
+            'qttTripScheduled' => $qttTripScheduledData ?? 0,
+            'qttTripScheduledNotDone' => $qttTripScheduledNotDoneData ?? 0,
+            'qttTripNonProductive' => $qttTripNonProductiveData ?? 0,
+            'qttTripUnscheduled' => $qttTripUnscheduledData ?? 0,
+            'qttAccidentEvent' => $qttAccidentEventData ?? 0,
+            'qttEventsUnsolved' => $qttEventsUnsolvedData ?? 0,
+        ];
+    }
+
+    $redisPublisher->publish('placar', json_encode([
+        'hasData' => true,
+        'all' => $allCompaniesData,
+        'companies' => $companiesData,
+    ]));
+    //(new SocketIoEmitter())
+    //    ->connect(($_ENV['SOCKETIO_HOST'] ?? $_SERVER['SOCKETIO_HOST']), ($_ENV['SOCKETIO_PORT'] ?? $_SERVER['SOCKETIO_PORT']), 'placar', json_encode([
+    //        'hasData' => true,
+    //        'all' => $allCompaniesData,
+    //        'companies' => $companiesData,
+    //    ]))
+    //;
+}
